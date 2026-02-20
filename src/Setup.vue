@@ -22,6 +22,7 @@ import "vue-sonner/style.css";
 import AboutSettings from "./components/AboutSettings.vue";
 import GeneralSettings from "./components/GeneralSettings.vue";
 import HookSettings from "./components/HookSettings.vue";
+import RemoteSettings from "./components/RemoteSettings.vue";
 import SlidingTabs from "./components/SlidingTabs.vue";
 import type { HookConfig } from "./types";
 
@@ -75,6 +76,15 @@ const config = ref<HookConfig>({
   notification_monitor: "primary",
   locale: "ko",
   codex_enabled: false,
+  remoteEnabled: false,
+  remotePort: 9876,
+  remoteToken: "",
+  sshHost: "",
+  sshPort: 22,
+  sshUser: "",
+  sshKeyPath: "",
+  sshRemotePort: 19876,
+  sshAutoConnect: false,
 });
 
 watch(
@@ -98,14 +108,14 @@ function normalizePath(p: string): string {
 onMounted(async () => {
   // Check URL hash for initial tab
   const hash = window.location.hash.slice(1);
-  if (hash && ["general", "hooks", "about"].includes(hash)) {
+  if (hash && ["general", "hooks", "remote", "about"].includes(hash)) {
     activeTab.value = hash;
   }
 
   // Listen for hash changes (when window already exists)
   window.addEventListener("hashchange", () => {
     const h = window.location.hash.slice(1);
-    if (h && ["general", "hooks", "about"].includes(h)) {
+    if (h && ["general", "hooks", "remote", "about"].includes(h)) {
       activeTab.value = h;
     }
   });
@@ -204,6 +214,15 @@ function onReset() {
     notification_monitor: "primary",
     locale: currentLocale,
     codex_enabled: false,
+    remoteEnabled: false,
+    remotePort: 9876,
+    remoteToken: "",
+    sshHost: "",
+    sshPort: 22,
+    sshUser: "",
+    sshKeyPath: "",
+    sshRemotePort: 19876,
+    sshAutoConnect: false,
   };
 }
 
@@ -313,6 +332,7 @@ async function onClose() {
           :tabs="[
             { value: 'general', label: t('setup.tab_general') },
             { value: 'hooks', label: t('setup.tab_hooks') },
+            { value: 'remote', label: t('setup.tab_remote') },
             { value: 'about', label: t('setup.tab_about') },
           ]"
         />
@@ -324,6 +344,7 @@ async function onClose() {
             @test-notification="onTestNotification"
           />
           <HookSettings v-if="activeTab === 'hooks'" v-model="config" />
+          <RemoteSettings v-if="activeTab === 'remote'" v-model="config" />
           <AboutSettings v-if="activeTab === 'about'" />
         </div>
       </div>

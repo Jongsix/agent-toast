@@ -101,7 +101,7 @@ pub fn check_for_updates(app: &AppHandle, state: &NotificationManagerState) {
         {
             Ok(c) => c,
             Err(e) => {
-                error!("Failed to create HTTP client: {}", e);
+                error!("Failed to create HTTP client: {e}");
                 return;
             }
         };
@@ -115,12 +115,12 @@ pub fn check_for_updates(app: &AppHandle, state: &NotificationManagerState) {
             Ok(r) => match r.json() {
                 Ok(j) => j,
                 Err(e) => {
-                    error!("Failed to parse response: {}", e);
+                    error!("Failed to parse response: {e}");
                     return;
                 }
             },
             Err(e) => {
-                error!("Failed to fetch: {}", e);
+                error!("Failed to fetch: {e}");
                 return;
             }
         };
@@ -128,7 +128,7 @@ pub fn check_for_updates(app: &AppHandle, state: &NotificationManagerState) {
         mark_checked();
 
         let current_version = app.package_info().version.to_string();
-        info!("Current: {}, Latest: {}", current_version, release.tag_name);
+        info!("Current: {current_version}, Latest: {}", release.tag_name);
 
         if is_newer(&current_version, &release.tag_name) {
             info!("New version available!");
@@ -142,11 +142,8 @@ pub fn check_for_updates(app: &AppHandle, state: &NotificationManagerState) {
 fn show_update_notification(app: &AppHandle, state: &NotificationManagerState, version: &str) {
     let locale = crate::setup::read_locale();
     let message = match locale.as_str() {
-        "en" => format!("Version {} is available. Click to update.", version),
-        _ => format!(
-            "{} 버전을 사용할 수 있습니다. 클릭하여 업데이트하세요.",
-            version
-        ),
+        "en" => format!("Version {version} is available. Click to update."),
+        _ => format!("{version} 버전을 사용할 수 있습니다. 클릭하여 업데이트하세요."),
     };
 
     let req = NotifyRequest {
@@ -176,13 +173,10 @@ pub fn check_update_completed(app: &AppHandle, state: &NotificationManagerState)
 
         let current_version = app.package_info().version.to_string();
         // Only show completion if we're now on the pending version
-        if format!("v{}", current_version) == pending_version
+        if format!("v{current_version}") == pending_version
             || current_version == pending_version.trim_start_matches('v')
         {
-            info!(
-                "Update completed: {} -> {}",
-                pending_version, current_version
-            );
+            info!("Update completed: {pending_version} -> {current_version}");
             show_update_completed_notification(app, state, &current_version);
         }
     }
@@ -195,8 +189,8 @@ fn show_update_completed_notification(
 ) {
     let locale = crate::setup::read_locale();
     let message = match locale.as_str() {
-        "en" => format!("Updated to v{}!", version),
-        _ => format!("v{}(으)로 업데이트되었습니다!", version),
+        "en" => format!("Updated to v{version}!"),
+        _ => format!("v{version}(으)로 업데이트되었습니다!"),
     };
 
     let req = NotifyRequest {

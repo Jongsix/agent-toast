@@ -86,7 +86,7 @@ fn main() {
         let json_str = args.codex_json.unwrap_or_default();
         let codex_payload: serde_json::Value =
             serde_json::from_str(&json_str).unwrap_or_else(|e| {
-                error!("Failed to parse Codex JSON: {}", e);
+                error!("Failed to parse Codex JSON: {e}");
                 std::process::exit(1);
             });
 

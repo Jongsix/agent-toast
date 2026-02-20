@@ -1,6 +1,7 @@
 pub mod cli;
 mod notification;
 pub mod pipe;
+pub mod remote;
 pub mod setup;
 pub mod sound;
 mod updater;
@@ -9,12 +10,21 @@ pub mod win32;
 use log::LevelFilter;
 use simplelog::{ColorChoice, CombinedLogger, Config, TermLogger, TerminalMode, WriteLogger};
 use std::fs::OpenOptions;
+use std::sync::{Arc, Mutex};
 
 use cli::NotifyRequest;
 use notification::{
     close_notification, get_notification_for_window, on_foreground_changed, show_notification,
     NotificationData, NotificationManagerState,
 };
+
+/// Managed state for the remote notification and SSH tunnel subsystem.
+pub struct RemoteState {
+    pub tunnel_status: Arc<Mutex<remote::TunnelStatus>>,
+    pub ssh_tunnel: Arc<Mutex<Option<remote::SshTunnel>>>,
+    /// True when the user explicitly disconnected the tunnel (suppress auto-reconnect).
+    pub user_disconnected: Arc<Mutex<bool>>,
+}
 
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
@@ -80,7 +90,7 @@ fn close_notify(id: String, app: AppHandle) {
 
 #[tauri::command]
 fn activate_source(hwnd: isize, id: String, app: AppHandle) {
-    log::debug!("activate_source called: hwnd={}, id={}", hwnd, id);
+    log::debug!("activate_source called: hwnd={hwnd}, id={id}");
     win32::activate_window(hwnd);
     let state = app.state::<NotificationManagerState>();
     close_notification(&app, &state, &id);
@@ -112,7 +122,7 @@ fn test_notification(app: AppHandle) {
         process_tree: Some(vec![]),
         source: "claude".into(),
     };
-    log::debug!("[TEST] Spawning notification thread for event={}", event);
+    log::debug!("[TEST] Spawning notification thread for event={event}");
     std::thread::spawn(move || {
         log::debug!("[TEST] Thread started, calling show_notification");
         show_notification(&app, &state, req);
@@ -136,7 +146,7 @@ pub fn open_setup_window_with_tab(app: &AppHandle, tab: Option<&str>) {
     // If setup window already exists, focus it (and optionally navigate to tab)
     if let Some(win) = app.get_webview_window("setup") {
         if let Some(t) = tab {
-            let _ = win.eval(format!("window.location.hash = '{}';", t));
+            let _ = win.eval(format!("window.location.hash = '{t}';"));
         }
         let _ = win.set_focus();
         return;
@@ -149,7 +159,7 @@ pub fn open_setup_window_with_tab(app: &AppHandle, tab: Option<&str>) {
     };
 
     let url = match tab {
-        Some(t) => format!("index.html#{}", t),
+        Some(t) => format!("index.html#{t}"),
         None => "index.html".to_string(),
     };
 
@@ -232,11 +242,19 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
 
     let mgr_state = notification::create_manager();
 
+    // Set up RemoteState with default disconnected status
+    let remote_state = RemoteState {
+        tunnel_status: Arc::new(Mutex::new(remote::TunnelStatus::Disconnected)),
+        ssh_tunnel: Arc::new(Mutex::new(None)),
+        user_disconnected: Arc::new(Mutex::new(false)),
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(mgr_state.clone())
+        .manage(remote_state)
         .invoke_handler(tauri::generate_handler![
             close_notify,
             activate_source,
@@ -254,7 +272,12 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             setup::is_hook_config_saved,
             setup::get_codex_installed,
             get_monitor_list,
-            updater::mark_update_pending
+            updater::mark_update_pending,
+            remote::connect_ssh_tunnel,
+            remote::disconnect_ssh_tunnel,
+            remote::get_tunnel_status,
+            remote::test_remote_connection,
+            remote::generate_remote_token,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -331,17 +354,56 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             // Check for updates in background
             updater::check_for_updates(&handle, &state);
 
+            // Start remote notification HTTP server if enabled
+            {
+                let hook_config = setup::get_hook_config();
+                if hook_config.remote_enabled {
+                    let remote_st = handle.state::<RemoteState>();
+                    let port = hook_config.remote_port;
+                    let token = hook_config.remote_token.clone();
+                    let http_app = handle.clone();
+                    let http_state = state.clone();
+                    remote::start_http_server(port, token, http_app, http_state);
+
+                    // Optionally auto-connect SSH tunnel
+                    if hook_config.ssh_auto_connect && !hook_config.ssh_host.is_empty() {
+                        let ssh_config = remote::SshConfig {
+                            host: hook_config.ssh_host.clone(),
+                            port: hook_config.ssh_port,
+                            user: hook_config.ssh_user.clone(),
+                            key_path: hook_config.ssh_key_path.clone(),
+                            remote_port: hook_config.ssh_remote_port,
+                            local_port: hook_config.remote_port,
+                        };
+                        let tunnel = remote::SshTunnel::new(ssh_config);
+                        *remote_st.ssh_tunnel.lock().unwrap() = Some(tunnel);
+
+                        let tunnel_arc = remote_st.ssh_tunnel.clone();
+                        let status_arc = remote_st.tunnel_status.clone();
+                        if let Some(ref mut t) = *remote_st.ssh_tunnel.lock().unwrap() {
+                            if let Err(e) = t.connect(status_arc.clone()) {
+                                log::error!("[SSH] Auto-connect failed: {e}");
+                            }
+                        }
+
+                        // Start watchdog for auto-reconnect
+                        let auto_reconnect = hook_config.ssh_auto_connect;
+                        remote::start_watchdog(tunnel_arc, status_arc, auto_reconnect);
+                    }
+                }
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
-                log::warn!("[EXIT] ExitRequested: code={:?}", code);
+                log::warn!("[EXIT] ExitRequested: code={code:?}");
                 if code.is_none() {
                     api.prevent_exit();
                 } else {
-                    log::error!("[EXIT] App exiting with code={:?}", code);
+                    log::error!("[EXIT] App exiting with code={code:?}");
                 }
             }
             RunEvent::Exit => {

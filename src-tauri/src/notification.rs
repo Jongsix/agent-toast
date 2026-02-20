@@ -76,8 +76,8 @@ pub fn show_notification(
         request.source
     );
 
-    // For internal notifications (updater), skip win32 lookups
-    let is_internal = request.source == "updater";
+    // For internal notifications (updater, remote), skip win32 lookups
+    let is_internal = request.source == "updater" || request.source == "remote";
 
     let (source_hwnd, process_tree, window_title) = if is_internal {
         (
@@ -106,13 +106,13 @@ pub fn show_notification(
         );
         for (h, p) in &all_candidates {
             let title = win32::get_window_title(*h);
-            log::debug!("[DEBUG]   candidate hwnd={} pid={} title={:?}", h, p, title);
+            log::debug!("[DEBUG]   candidate hwnd={h} pid={p} title={title:?}");
         }
         let (hwnd, _) = found.unwrap_or((0, 0));
 
         // FR-2: Skip if source window is already focused (compare by HWND, not PID)
         let focused = win32::is_hwnd_focused(hwnd);
-        log::debug!("[DEBUG] is_hwnd_focused({})={}", hwnd, focused);
+        log::debug!("[DEBUG] is_hwnd_focused({hwnd})={focused}");
         if focused {
             return;
         }
@@ -183,7 +183,7 @@ pub fn show_notification(
 
         match window {
             Ok(win) => {
-                log::debug!("[NOTIFY] Window created: id={}", id);
+                log::debug!("[NOTIFY] Window created: id={id}");
                 // Explicitly set position with Logical coordinates (builder may use Physical)
                 let _ =
                     win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
@@ -199,15 +199,15 @@ pub fn show_notification(
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(500));
                     match app_clone.emit_to(&label, "notification-data", &data_clone) {
-                        Ok(_) => log::debug!("[NOTIFY] Event emitted: id={}", label),
+                        Ok(_) => log::debug!("[NOTIFY] Event emitted: id={label}"),
                         Err(e) => {
-                            log::debug!("[NOTIFY] Event emit failed: id={}, err={}", label, e)
+                            log::debug!("[NOTIFY] Event emit failed: id={label}, err={e}")
                         }
                     }
                 });
             }
             Err(e) => {
-                log::debug!("[NOTIFY] Window creation FAILED: id={}, err={}", id, e);
+                log::debug!("[NOTIFY] Window creation FAILED: id={id}, err={e}");
                 // Rollback: remove from notifications list
                 let mut mgr = state.lock().unwrap();
                 mgr.notifications.retain(|n| n.id != id);
@@ -217,7 +217,7 @@ pub fn show_notification(
 }
 
 pub fn close_notification(app: &AppHandle, state: &NotificationManagerState, id: &str) {
-    log::debug!("[DEBUG] close_notification called: id={}", id);
+    log::debug!("[DEBUG] close_notification called: id={id}");
     let mut mgr = state.lock().unwrap();
     mgr.notifications.retain(|n| n.id != id);
     let remaining: Vec<NotificationData> = mgr.notifications.clone();
@@ -225,13 +225,13 @@ pub fn close_notification(app: &AppHandle, state: &NotificationManagerState, id:
 
     // Close the window
     if let Some(win) = app.get_webview_window(id) {
-        log::debug!("[DEBUG] closing window: id={}", id);
+        log::debug!("[DEBUG] closing window: id={id}");
         match win.destroy() {
-            Ok(_) => log::debug!("[DEBUG] window closed ok: id={}", id),
-            Err(e) => log::debug!("[DEBUG] window close failed: id={}, err={}", id, e),
+            Ok(_) => log::debug!("[DEBUG] window closed ok: id={id}"),
+            Err(e) => log::debug!("[DEBUG] window close failed: id={id}, err={e}"),
         }
     } else {
-        log::debug!("[DEBUG] window not found: id={}", id);
+        log::debug!("[DEBUG] window not found: id={id}");
     }
 
     // Reposition remaining notifications
@@ -342,9 +342,7 @@ pub fn on_foreground_changed(
     drop(mgr);
     if !to_close.is_empty() {
         log::debug!(
-            "[DEBUG] on_foreground_changed: focused_hwnd={}, closing={:?}",
-            focused_hwnd,
-            to_close
+            "[DEBUG] on_foreground_changed: focused_hwnd={focused_hwnd}, closing={to_close:?}"
         );
     }
 

@@ -66,6 +66,46 @@ pub struct HookConfig {
     /// Codex notify 훅 활성화 여부
     #[serde(default)]
     pub codex_enabled: bool,
+    // Remote notification settings
+    /// Enable HTTP server for remote notification forwarding
+    #[serde(default)]
+    pub remote_enabled: bool,
+    /// Local HTTP server port for incoming remote notifications
+    #[serde(default = "default_remote_port")]
+    pub remote_port: u16,
+    /// Bearer token for HTTP endpoint authentication
+    #[serde(default)]
+    pub remote_token: String,
+    /// SSH tunnel target host
+    #[serde(default)]
+    pub ssh_host: String,
+    /// SSH port
+    #[serde(default = "default_ssh_port")]
+    pub ssh_port: u16,
+    /// SSH username
+    #[serde(default)]
+    pub ssh_user: String,
+    /// Path to SSH private key file
+    #[serde(default)]
+    pub ssh_key_path: String,
+    /// Remote forwarding port on the SSH server
+    #[serde(default = "default_ssh_remote_port")]
+    pub ssh_remote_port: u16,
+    /// Automatically connect SSH tunnel on startup
+    #[serde(default)]
+    pub ssh_auto_connect: bool,
+}
+
+fn default_remote_port() -> u16 {
+    9876
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+fn default_ssh_remote_port() -> u16 {
+    19876
 }
 
 fn default_title_display_mode() -> String {
@@ -145,6 +185,16 @@ impl Default for HookConfig {
             notification_monitor: "primary".into(),
             locale: "ko".into(),
             codex_enabled: false,
+            // Remote defaults
+            remote_enabled: false,
+            remote_port: 9876,
+            remote_token: String::new(),
+            ssh_host: String::new(),
+            ssh_port: 22,
+            ssh_user: String::new(),
+            ssh_key_path: String::new(),
+            ssh_remote_port: 19876,
+            ssh_auto_connect: false,
         }
     }
 }
@@ -168,7 +218,7 @@ fn exe_path_unquoted() -> String {
 fn exe_path_for_shell() -> String {
     let path = exe_path_unquoted();
     if path.contains(' ') {
-        format!("\"{}\"", path)
+        format!("\"{path}\"")
     } else {
         path
     }
@@ -238,6 +288,34 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
         codex_enabled: root["agent_toast"]["codex_enabled"]
             .as_bool()
             .unwrap_or_else(get_codex_installed),
+        // Remote settings
+        remote_enabled: root["agent_toast"]["remote_enabled"]
+            .as_bool()
+            .unwrap_or(false),
+        remote_port: root["agent_toast"]["remote_port"].as_u64().unwrap_or(9876) as u16,
+        remote_token: root["agent_toast"]["remote_token"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        ssh_host: root["agent_toast"]["ssh_host"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        ssh_port: root["agent_toast"]["ssh_port"].as_u64().unwrap_or(22) as u16,
+        ssh_user: root["agent_toast"]["ssh_user"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        ssh_key_path: root["agent_toast"]["ssh_key_path"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        ssh_remote_port: root["agent_toast"]["ssh_remote_port"]
+            .as_u64()
+            .unwrap_or(19876) as u16,
+        ssh_auto_connect: root["agent_toast"]["ssh_auto_connect"]
+            .as_bool()
+            .unwrap_or(false),
         // 나머지는 Default에서 가져오기
         ..HookConfig::default()
     };
@@ -512,7 +590,7 @@ pub fn save_hook_config(
 
     // SessionStart: always add --daemon entry (infrastructure)
     {
-        let entry = build_hook_entry(None, &format!("{} --daemon", exe), None);
+        let entry = build_hook_entry(None, &format!("{exe} --daemon"), None);
         hooks
             .entry("SessionStart".to_string())
             .or_insert_with(|| Value::Array(vec![]))
@@ -764,6 +842,25 @@ pub fn save_hook_config(
     );
     cn.insert("locale".into(), Value::String(config.locale));
     cn.insert("codex_enabled".into(), Value::Bool(config.codex_enabled));
+    // Remote settings
+    cn.insert("remote_enabled".into(), Value::Bool(config.remote_enabled));
+    cn.insert(
+        "remote_port".into(),
+        Value::Number(config.remote_port.into()),
+    );
+    cn.insert("remote_token".into(), Value::String(config.remote_token));
+    cn.insert("ssh_host".into(), Value::String(config.ssh_host));
+    cn.insert("ssh_port".into(), Value::Number(config.ssh_port.into()));
+    cn.insert("ssh_user".into(), Value::String(config.ssh_user));
+    cn.insert("ssh_key_path".into(), Value::String(config.ssh_key_path));
+    cn.insert(
+        "ssh_remote_port".into(),
+        Value::Number(config.ssh_remote_port.into()),
+    );
+    cn.insert(
+        "ssh_auto_connect".into(),
+        Value::Bool(config.ssh_auto_connect),
+    );
     root["agent_toast"] = Value::Object(cn);
 
     // Ensure .claude directory exists
@@ -1616,5 +1713,103 @@ mod tests {
         assert!(default_notification_sound());
         assert_eq!(default_notification_monitor(), "primary");
         assert_eq!(default_locale(), "ko");
+    }
+
+    // ── Remote fields default tests ──
+
+    #[test]
+    fn test_hookconfig_remote_defaults() {
+        let config = HookConfig::default();
+        assert!(!config.remote_enabled);
+        assert_eq!(config.remote_port, 9876);
+        assert_eq!(config.remote_token, "");
+        assert_eq!(config.ssh_host, "");
+        assert_eq!(config.ssh_port, 22);
+        assert_eq!(config.ssh_user, "");
+        assert_eq!(config.ssh_key_path, "");
+        assert_eq!(config.ssh_remote_port, 19876);
+        assert!(!config.ssh_auto_connect);
+    }
+
+    #[test]
+    fn test_remote_port_default_function() {
+        assert_eq!(default_remote_port(), 9876);
+    }
+
+    #[test]
+    fn test_ssh_port_default_function() {
+        assert_eq!(default_ssh_port(), 22);
+    }
+
+    #[test]
+    fn test_ssh_remote_port_default_function() {
+        assert_eq!(default_ssh_remote_port(), 19876);
+    }
+
+    #[test]
+    fn parse_remote_settings_from_json() {
+        let json = r#"{
+            "agent_toast": {
+                "remote_enabled": true,
+                "remote_port": 8888,
+                "remote_token": "abc123",
+                "ssh_host": "example.com",
+                "ssh_port": 2222,
+                "ssh_user": "myuser",
+                "ssh_key_path": "/home/user/.ssh/id_rsa",
+                "ssh_remote_port": 19876,
+                "ssh_auto_connect": true
+            }
+        }"#;
+        let config = parse_hook_config_from_json(json);
+        assert!(config.remote_enabled);
+        assert_eq!(config.remote_port, 8888);
+        assert_eq!(config.remote_token, "abc123");
+        assert_eq!(config.ssh_host, "example.com");
+        assert_eq!(config.ssh_port, 2222);
+        assert_eq!(config.ssh_user, "myuser");
+        assert_eq!(config.ssh_key_path, "/home/user/.ssh/id_rsa");
+        assert_eq!(config.ssh_remote_port, 19876);
+        assert!(config.ssh_auto_connect);
+    }
+
+    #[test]
+    fn parse_remote_settings_defaults_when_absent() {
+        let json = r#"{"agent_toast": {}}"#;
+        let config = parse_hook_config_from_json(json);
+        assert!(!config.remote_enabled);
+        assert_eq!(config.remote_port, 9876);
+        assert_eq!(config.remote_token, "");
+        assert_eq!(config.ssh_host, "");
+        assert_eq!(config.ssh_port, 22);
+        assert_eq!(config.ssh_remote_port, 19876);
+        assert!(!config.ssh_auto_connect);
+    }
+
+    #[test]
+    fn hook_config_remote_serde_roundtrip() {
+        let config = HookConfig {
+            remote_enabled: true,
+            remote_port: 9876,
+            remote_token: "test-token".to_string(),
+            ssh_host: "ssh.example.com".to_string(),
+            ssh_port: 22,
+            ssh_user: "admin".to_string(),
+            ssh_key_path: "/root/.ssh/id_ed25519".to_string(),
+            ssh_remote_port: 19876,
+            ssh_auto_connect: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: HookConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.remote_enabled, config.remote_enabled);
+        assert_eq!(deserialized.remote_port, config.remote_port);
+        assert_eq!(deserialized.remote_token, config.remote_token);
+        assert_eq!(deserialized.ssh_host, config.ssh_host);
+        assert_eq!(deserialized.ssh_port, config.ssh_port);
+        assert_eq!(deserialized.ssh_user, config.ssh_user);
+        assert_eq!(deserialized.ssh_key_path, config.ssh_key_path);
+        assert_eq!(deserialized.ssh_remote_port, config.ssh_remote_port);
+        assert_eq!(deserialized.ssh_auto_connect, config.ssh_auto_connect);
     }
 }

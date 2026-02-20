@@ -127,16 +127,16 @@ where
             log::debug!("[PIPE] Callback completed");
         }
         Err(e) => {
-            log::error!("[PIPE] JSON parse error: {}", e);
+            log::error!("[PIPE] JSON parse error: {e}");
         }
     }
 
     unsafe {
         if let Err(e) = DisconnectNamedPipe(handle) {
-            log::warn!("[PIPE] DisconnectNamedPipe failed: {:?}", e);
+            log::warn!("[PIPE] DisconnectNamedPipe failed: {e:?}");
         }
         if let Err(e) = CloseHandle(handle) {
-            log::warn!("[PIPE] CloseHandle failed: {:?}", e);
+            log::warn!("[PIPE] CloseHandle failed: {e:?}");
         }
     }
 
