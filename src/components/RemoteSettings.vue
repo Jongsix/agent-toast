@@ -20,6 +20,7 @@ const config = defineModel<HookConfig>({ required: true });
 const { t } = useI18n();
 
 const tunnelStatus = ref("Disconnected");
+const sshLogPath = ref("");
 let statusInterval: ReturnType<typeof setInterval> | null = null;
 
 async function pollStatus() {
@@ -30,8 +31,9 @@ async function pollStatus() {
   }
 }
 
-onMounted(() => {
-  if (config.value.remoteEnabled) {
+onMounted(async () => {
+  sshLogPath.value = await invoke<string>("get_ssh_log_path");
+  if (config.value.remote_enabled) {
     pollStatus();
     statusInterval = setInterval(pollStatus, 2000);
   }
@@ -45,7 +47,7 @@ onUnmounted(() => {
 });
 
 watch(
-  () => config.value.remoteEnabled,
+  () => config.value.remote_enabled,
   (enabled) => {
     if (enabled && !statusInterval) {
       statusInterval = setInterval(pollStatus, 2000);
@@ -60,10 +62,20 @@ watch(
 
 async function connectTunnel() {
   try {
-    await invoke("connect_ssh_tunnel");
+    await invoke("connect_ssh_tunnel", {
+      ssh_host: config.value.ssh_host,
+      ssh_port: config.value.ssh_port,
+      ssh_user: config.value.ssh_user,
+      ssh_key_path: config.value.ssh_key_path,
+      ssh_remote_port: config.value.ssh_remote_port,
+      remote_port: config.value.remote_port,
+      remote_token: config.value.remote_token,
+    });
     await pollStatus();
   } catch (e) {
-    toast.error(String(e));
+    const msg = String(e);
+    toast.error(msg, { duration: 8000 });
+    await pollStatus();
   }
 }
 
@@ -88,7 +100,7 @@ async function testConnection() {
 async function regenerateToken() {
   try {
     const token = await invoke<string>("generate_remote_token");
-    config.value = { ...config.value, remoteToken: token };
+    config.value = { ...config.value, remote_token: token };
   } catch (e) {
     toast.error(String(e));
   }
@@ -104,14 +116,14 @@ async function copyToClipboard(text: string) {
 }
 
 const curlCommand = computed(() => {
-  const port = config.value.sshRemotePort || 19876;
-  const token = config.value.remoteToken || "YOUR_TOKEN";
+  const port = config.value.ssh_remote_port || 19876;
+  const token = config.value.remote_token || "YOUR_TOKEN";
   return `curl -s -X POST \\\n  -H "X-Agent-Toast-Token: ${token}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"pid":0,"event":"task_complete","message":"Build done","source":"remote"}' \\\n  http://localhost:${port}/notify`;
 });
 
 const hookConfigExample = computed(() => {
-  const port = config.value.sshRemotePort || 19876;
-  const token = config.value.remoteToken || "YOUR_TOKEN";
+  const port = config.value.ssh_remote_port || 19876;
+  const token = config.value.remote_token || "YOUR_TOKEN";
   return `{
   "hooks": {
     "Stop": [{
@@ -122,7 +134,10 @@ const hookConfigExample = computed(() => {
       }]
     }]
   }
-}`;
+}
+
+Linux/macOS:
+curl -s -X POST -H 'X-Agent-Toast-Token: ${token}' -H 'Content-Type: application/json' -d '{"pid":0,"event":"task_complete","message":"Task done","source":"remote"}' http://localhost:${port}/notify`;
 });
 
 const isConnected = computed(() => tunnelStatus.value === "Connected");
@@ -141,6 +156,13 @@ const statusBadgeVariant = computed(() => {
   }
 });
 
+const isError = computed(
+  () =>
+    tunnelStatus.value !== "Connected" &&
+    tunnelStatus.value !== "Connecting" &&
+    tunnelStatus.value !== "Disconnected",
+);
+
 const statusLabel = computed(() => {
   switch (tunnelStatus.value) {
     case "Connected":
@@ -150,9 +172,7 @@ const statusLabel = computed(() => {
     case "Disconnected":
       return t("remote.disconnected");
     default:
-      return tunnelStatus.value.startsWith("Error:")
-        ? tunnelStatus.value
-        : t("remote.error");
+      return t("remote.error");
   }
 });
 </script>
@@ -169,10 +189,10 @@ const statusLabel = computed(() => {
         <span class="text-sm font-medium text-foreground">{{
           t("remote.enable")
         }}</span>
-        <Switch v-model="config.remoteEnabled" />
+        <Switch v-model="config.remote_enabled" />
       </div>
 
-      <template v-if="config.remoteEnabled">
+      <template v-if="config.remote_enabled">
         <!-- Server Configuration Section -->
         <div class="flex flex-col gap-2">
           <span
@@ -188,7 +208,7 @@ const statusLabel = computed(() => {
               t("remote.localPort")
             }}</span>
             <NumberField
-              v-model="config.remotePort"
+              v-model="config.remote_port"
               :min="1024"
               :max="65535"
               :step="1"
@@ -211,7 +231,7 @@ const statusLabel = computed(() => {
             }}</span>
             <div class="flex items-center gap-2">
               <Input
-                :model-value="config.remoteToken"
+                :model-value="config.remote_token"
                 readonly
                 class="flex-1 h-7 text-xs font-mono"
                 :placeholder="t('remote.authToken')"
@@ -220,7 +240,7 @@ const statusLabel = computed(() => {
                 variant="outline"
                 size="sm"
                 class="h-7 px-2 text-xs"
-                @click="copyToClipboard(config.remoteToken)"
+                @click="copyToClipboard(config.remote_token)"
               >
                 {{ t("remote.copy") }}
               </Button>
@@ -251,7 +271,7 @@ const statusLabel = computed(() => {
               t("remote.sshHost")
             }}</span>
             <Input
-              v-model="config.sshHost"
+              v-model="config.ssh_host"
               class="w-[180px] h-7 text-xs"
               placeholder="user@host.example.com"
             />
@@ -265,7 +285,7 @@ const statusLabel = computed(() => {
               t("remote.sshPort")
             }}</span>
             <NumberField
-              v-model="config.sshPort"
+              v-model="config.ssh_port"
               :min="1"
               :max="65535"
               :step="1"
@@ -287,7 +307,7 @@ const statusLabel = computed(() => {
               t("remote.sshUser")
             }}</span>
             <Input
-              v-model="config.sshUser"
+              v-model="config.ssh_user"
               class="w-[180px] h-7 text-xs"
               placeholder="username"
             />
@@ -301,7 +321,7 @@ const statusLabel = computed(() => {
               t("remote.sshKeyPath")
             }}</span>
             <Input
-              v-model="config.sshKeyPath"
+              v-model="config.ssh_key_path"
               class="w-[180px] h-7 text-xs"
               placeholder="~/.ssh/id_rsa"
             />
@@ -315,7 +335,7 @@ const statusLabel = computed(() => {
               t("remote.sshRemotePort")
             }}</span>
             <NumberField
-              v-model="config.sshRemotePort"
+              v-model="config.ssh_remote_port"
               :min="1024"
               :max="65535"
               :step="1"
@@ -336,7 +356,7 @@ const statusLabel = computed(() => {
             <span class="text-sm font-medium text-foreground">{{
               t("remote.autoConnect")
             }}</span>
-            <Switch v-model="config.sshAutoConnect" />
+            <Switch v-model="config.ssh_auto_connect" />
           </div>
         </div>
 
@@ -348,43 +368,53 @@ const statusLabel = computed(() => {
           >
 
           <div
-            class="flex items-center justify-between bg-card border rounded-[10px] px-3.5 py-3"
+            class="flex flex-col gap-2 bg-card border rounded-[10px] px-3.5 py-3"
           >
-            <div class="flex items-center gap-2">
-              <Badge :variant="statusBadgeVariant" class="text-xs">{{
-                statusLabel
-              }}</Badge>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <Badge :variant="statusBadgeVariant" class="text-xs">{{
+                  statusLabel
+                }}</Badge>
+              </div>
+              <div class="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="h-7 text-xs"
+                  :disabled="isConnecting"
+                  @click="testConnection"
+                >
+                  {{ t("remote.testConnection") }}
+                </Button>
+                <Button
+                  v-if="!isConnected"
+                  size="sm"
+                  class="h-7 text-xs"
+                  :disabled="isConnecting || !config.ssh_host"
+                  @click="connectTunnel"
+                >
+                  {{
+                    isConnecting ? t("remote.connecting") : t("remote.connect")
+                  }}
+                </Button>
+                <Button
+                  v-else
+                  variant="destructive"
+                  size="sm"
+                  class="h-7 text-xs"
+                  @click="disconnectTunnel"
+                >
+                  {{ t("remote.disconnect") }}
+                </Button>
+              </div>
             </div>
-            <div class="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                class="h-7 text-xs"
-                :disabled="isConnecting"
-                @click="testConnection"
-              >
-                {{ t("remote.testConnection") }}
-              </Button>
-              <Button
-                v-if="!isConnected"
-                size="sm"
-                class="h-7 text-xs"
-                :disabled="isConnecting || !config.sshHost"
-                @click="connectTunnel"
-              >
-                {{
-                  isConnecting ? t("remote.connecting") : t("remote.connect")
-                }}
-              </Button>
-              <Button
-                v-else
-                variant="destructive"
-                size="sm"
-                class="h-7 text-xs"
-                @click="disconnectTunnel"
-              >
-                {{ t("remote.disconnect") }}
-              </Button>
+            <!-- Error log path hint -->
+            <div
+              v-if="isError && sshLogPath"
+              class="text-[11px] text-destructive/80 break-all"
+            >
+              {{ t("remote.logHint") }}
+              <code class="text-[10px] text-foreground/60">{{ sshLogPath }}</code>
             </div>
           </div>
         </div>

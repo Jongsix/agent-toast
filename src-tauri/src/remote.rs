@@ -1,6 +1,6 @@
 use crate::cli::NotifyRequest;
 use crate::notification::{show_notification, NotificationManagerState};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::AppHandle;
@@ -90,25 +90,36 @@ impl SshTunnel {
     ///     -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes
     pub fn build_ssh_args(&self) -> Vec<String> {
         let cfg = &self.config;
-        vec![
+        let mut args = vec![
             "-R".to_string(),
-            format!("{}:127.0.0.1:{}", cfg.remote_port, cfg.local_port),
+            format!("*:{}:127.0.0.1:{}", cfg.remote_port, cfg.local_port),
             format!("{}@{}", cfg.user, cfg.host),
             "-p".to_string(),
             cfg.port.to_string(),
             "-N".to_string(),
-            "-i".to_string(),
-            cfg.key_path.clone(),
+        ];
+        // Only add -i if key path is specified
+        if !cfg.key_path.is_empty() {
+            args.push("-i".to_string());
+            args.push(cfg.key_path.clone());
+        }
+        args.extend([
             "-o".to_string(),
             "StrictHostKeyChecking=accept-new".to_string(),
             "-o".to_string(),
             "ServerAliveInterval=30".to_string(),
             "-o".to_string(),
             "ExitOnForwardFailure=yes".to_string(),
-        ]
+        ]);
+        args
     }
 
-    /// Spawn the SSH process and return it.
+    /// Spawn the SSH process with stderr capture for error logging.
+    ///
+    /// Waits briefly (up to 3 seconds) for early failures such as
+    /// "connection refused" or "permission denied".  If the process exits
+    /// within that window the captured stderr is written to the log file and
+    /// the error message returned to the caller contains only the log path.
     pub fn connect(&mut self, status: Arc<Mutex<TunnelStatus>>) -> Result<(), String> {
         if self.process.is_some() {
             return Err("Tunnel already running".to_string());
@@ -118,33 +129,94 @@ impl SshTunnel {
 
         let args = self.build_ssh_args();
         log::info!(
-            "[SSH] Connecting tunnel to {}:{}",
+            "[SSH] Connecting tunnel to {}:{} (args: {:?})",
             self.config.host,
-            self.config.port
+            self.config.port,
+            args
         );
 
-        match Command::new("ssh").args(&args).spawn() {
-            Ok(child) => {
-                self.process = Some(child);
-                *status.lock().unwrap() = TunnelStatus::Connected;
-                log::info!("[SSH] Tunnel process spawned");
-                Ok(())
-            }
-            Err(e) => {
+        let mut cmd = Command::new("ssh");
+        cmd.args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+
+        // Hide the console window on Windows
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
                 let msg = format!("Failed to spawn ssh: {e}");
                 *status.lock().unwrap() = TunnelStatus::Error(msg.clone());
                 log::error!("[SSH] {msg}");
-                Err(msg)
+                msg
+            })?;
+
+        // Wait briefly for early exit (auth failure, connection refused, etc.)
+        let wait_ms = 3000u64;
+        let poll_interval = Duration::from_millis(100);
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(exit_status)) => {
+                    // Process exited early — read stderr for diagnostics
+                    let stderr_text = child
+                        .stderr
+                        .take()
+                        .map(|mut pipe| {
+                            let mut buf = String::new();
+                            std::io::Read::read_to_string(&mut pipe, &mut buf).ok();
+                            buf
+                        })
+                        .unwrap_or_default();
+
+                    let log_path = ssh_log_path();
+                    write_ssh_log(&log_path, &args, exit_status.code(), &stderr_text);
+
+                    let msg = format!(
+                        "SSH connection failed (exit {}). Details: {}",
+                        exit_status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()),
+                        log_path,
+                    );
+                    *status.lock().unwrap() = TunnelStatus::Error(msg.clone());
+                    log::error!("[SSH] {msg}");
+                    return Err(msg);
+                }
+                Ok(None) => {
+                    // Still running
+                    if start.elapsed() >= Duration::from_millis(wait_ms) {
+                        break; // survived the window → assume connected
+                    }
+                    std::thread::sleep(poll_interval);
+                }
+                Err(e) => {
+                    let msg = format!("Failed to poll ssh process: {e}");
+                    *status.lock().unwrap() = TunnelStatus::Error(msg.clone());
+                    log::error!("[SSH] {msg}");
+                    return Err(msg);
+                }
             }
         }
+
+        self.process = Some(child);
+        *status.lock().unwrap() = TunnelStatus::Connected;
+        log::info!("[SSH] Tunnel process spawned and alive after {}ms", wait_ms);
+        Ok(())
     }
 
     /// Kill the SSH process and reset state.
     pub fn disconnect(&mut self, status: Arc<Mutex<TunnelStatus>>) {
         if let Some(mut child) = self.process.take() {
+            log::info!("[SSH] Killing tunnel process (pid={:?})", child.id());
             let _ = child.kill();
             let _ = child.wait();
-            log::info!("[SSH] Tunnel disconnected");
+            log::info!("[SSH] Tunnel process terminated");
+        } else {
+            log::info!("[SSH] Disconnect called but no active process");
         }
         *status.lock().unwrap() = TunnelStatus::Disconnected;
     }
@@ -211,6 +283,7 @@ pub fn start_http_server(
     app: AppHandle,
     state: NotificationManagerState,
 ) {
+    log::info!("[HTTP] Starting remote notification server on port {port} (token configured: {})", !token.is_empty());
     std::thread::spawn(move || {
         let addr = format!("127.0.0.1:{port}");
         let server = match tiny_http::Server::http(&addr) {
@@ -224,9 +297,11 @@ pub fn start_http_server(
             }
         };
 
+        log::info!("[HTTP] Server ready, waiting for incoming requests...");
         for request in server.incoming_requests() {
             handle_http_request(request, &token, &app, &state);
         }
+        log::warn!("[HTTP] Server loop ended unexpectedly");
     });
 }
 
@@ -239,16 +314,19 @@ fn handle_http_request(
 ) {
     let method = request.method().to_string();
     let url = request.url().to_string();
+    let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".into());
 
-    log::debug!("[HTTP] {method} {url}");
+    log::info!("[HTTP] Incoming request: {method} {url} from {remote_addr}");
 
     // Only accept POST /notify
     if url != "/notify" {
+        log::warn!("[HTTP] 404 Not Found: {method} {url}");
         respond_status(request, 404, "Not Found");
         return;
     }
 
     if method != "POST" {
+        log::warn!("[HTTP] 405 Method Not Allowed: {method} {url}");
         respond_status(request, 405, "Method Not Allowed");
         return;
     }
@@ -262,8 +340,14 @@ fn handle_http_request(
         .unwrap_or("")
         .to_string();
 
+    let has_token_header = request
+        .headers()
+        .iter()
+        .any(|h| h.field.equiv("X-Agent-Toast-Token"));
+    log::info!("[HTTP] Token header present: {has_token_header}, token configured: {}", !token.is_empty());
+
     if token.is_empty() || provided_token != token {
-        log::warn!("[HTTP] Unauthorized request: token mismatch [TOKEN MASKED]");
+        log::warn!("[HTTP] 401 Unauthorized: token mismatch (header present: {has_token_header})");
         respond_status(request, 401, "Unauthorized");
         return;
     }
@@ -271,16 +355,17 @@ fn handle_http_request(
     // Read body
     let mut body = String::new();
     if let Err(e) = std::io::Read::read_to_string(request.as_reader(), &mut body) {
-        log::error!("[HTTP] Failed to read request body: {e}");
+        log::error!("[HTTP] 400 Bad Request: failed to read body: {e}");
         respond_status(request, 400, "Bad Request");
         return;
     }
+    log::info!("[HTTP] Request body ({} bytes): {}", body.len(), &body[..body.len().min(500)]);
 
     // Deserialize the notify request
     let mut notify_req: NotifyRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
-            log::error!("[HTTP] Invalid JSON body: {e}");
+            log::error!("[HTTP] 400 Bad Request: invalid JSON: {e}");
             respond_status(request, 400, "Bad Request");
             return;
         }
@@ -290,9 +375,10 @@ fn handle_http_request(
     notify_req.source = "remote".to_string();
 
     log::info!(
-        "[HTTP] Remote notification: event={}, pid={}",
+        "[HTTP] 200 OK: showing notification event={}, pid={}, message={:?}",
         notify_req.event,
-        notify_req.pid
+        notify_req.pid,
+        notify_req.message
     );
 
     show_notification(app, state, notify_req);
@@ -304,21 +390,137 @@ fn handle_http_request(
 fn respond_status(request: tiny_http::Request, code: u16, text: &str) {
     let response = tiny_http::Response::from_string(text).with_status_code(code);
     if let Err(e) = request.respond(response) {
-        log::debug!("[HTTP] Failed to send response: {e}");
+        log::error!("[HTTP] Failed to send response (code={code}): {e}");
+    }
+}
+
+// ── SSH Log Helpers ──────────────────────────────────────────────────────────
+
+/// Return the path to the SSH-specific log file (%TEMP%/agent-toast-ssh.log).
+pub fn ssh_log_path() -> String {
+    std::env::temp_dir()
+        .join("agent-toast-ssh.log")
+        .to_string_lossy()
+        .to_string()
+}
+
+/// Append a timestamped SSH error entry to the log file.
+fn write_ssh_log(path: &str, args: &[String], exit_code: Option<i32>, stderr: &str) {
+    use std::io::Write;
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let entry = format!(
+        "\n[{timestamp}] SSH Connection Failed\n\
+         Command: ssh {}\n\
+         Exit code: {}\n\
+         --- stderr ---\n\
+         {}\n\
+         --- end ---\n",
+        args.join(" "),
+        exit_code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into()),
+        if stderr.trim().is_empty() { "(no output)" } else { stderr.trim() },
+    );
+    log::error!("[SSH] {entry}");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(entry.as_bytes());
     }
 }
 
 // ── IPC Commands ──────────────────────────────────────────────────────────────
 
+/// Resolve `~` or `~/` prefix in a path to the user's home directory.
+pub fn resolve_home_dir(path: &str) -> String {
+    if path.starts_with("~/") || path.starts_with("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(&path[2..]).to_string_lossy().to_string();
+        }
+    } else if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home.to_string_lossy().to_string();
+        }
+    }
+    path.to_string()
+}
+
 /// Tauri command: connect the SSH tunnel.
-#[tauri::command]
+/// Accepts current UI config values so the user doesn't need to save first.
+#[tauri::command(rename_all = "snake_case")]
 pub fn connect_ssh_tunnel(
+    app: AppHandle,
     tunnel_state: tauri::State<'_, crate::RemoteState>,
+    notification_state: tauri::State<'_, crate::notification::NotificationManagerState>,
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_user: String,
+    ssh_key_path: String,
+    ssh_remote_port: u16,
+    remote_port: u16,
+    remote_token: String,
 ) -> Result<(), String> {
+    log::info!(
+        "[SSH] connect_ssh_tunnel called: host={}, port={}, user={}, key_path={}, remote_port={}, local_port={}, token_len={}",
+        ssh_host, ssh_port, ssh_user, ssh_key_path, ssh_remote_port, remote_port, remote_token.len()
+    );
+
+    if ssh_host.is_empty() {
+        log::warn!("[SSH] SSH host is empty, aborting connection");
+        return Err("SSH host is not configured".to_string());
+    }
+
+    // Ensure the HTTP notification server is running on the correct port
+    {
+        let mut current_port = tunnel_state.http_server_port.lock().unwrap();
+        if *current_port == 0 || *current_port != remote_port {
+            if *current_port != 0 {
+                log::warn!("[HTTP] Port changed from {} to {} — starting new server (old server on {} will be orphaned)", *current_port, remote_port, *current_port);
+            } else {
+                log::info!("[HTTP] HTTP server not yet started — starting on port {remote_port}");
+            }
+            start_http_server(
+                remote_port,
+                remote_token,
+                app.clone(),
+                notification_state.inner().clone(),
+            );
+            *current_port = remote_port;
+        } else {
+            log::info!("[HTTP] HTTP server already running on port {remote_port}");
+        }
+    }
+
     let status = tunnel_state.tunnel_status.clone();
     let mut guard = tunnel_state.ssh_tunnel.lock().unwrap();
+
+    // Always recreate the tunnel with current UI values
+    // (previous tunnel may have stale config)
+    if let Some(ref mut old) = *guard {
+        log::info!("[SSH] Disconnecting previous tunnel before reconnecting");
+        old.disconnect(status.clone());
+    }
+
+    let ssh_config = SshConfig {
+        host: ssh_host,
+        port: ssh_port,
+        user: ssh_user,
+        key_path: resolve_home_dir(&ssh_key_path),
+        remote_port: ssh_remote_port,
+        local_port: remote_port,
+    };
+    log::info!("[SSH] Creating new tunnel with config: {}@{}:{} -R {}:127.0.0.1:{}",
+        ssh_config.user, ssh_config.host, ssh_config.port,
+        ssh_config.remote_port, ssh_config.local_port);
+    *guard = Some(SshTunnel::new(ssh_config));
+
     match guard.as_mut() {
-        Some(t) => t.connect(status),
+        Some(t) => {
+            *tunnel_state.user_disconnected.lock().unwrap() = false;
+            let result = t.connect(status);
+            log::info!("[SSH] connect result: {:?}", result);
+            result
+        }
         None => Err("SSH tunnel not configured".to_string()),
     }
 }
@@ -342,10 +544,10 @@ pub fn disconnect_ssh_tunnel(
 #[tauri::command]
 pub fn get_tunnel_status(tunnel_state: tauri::State<'_, crate::RemoteState>) -> String {
     match &*tunnel_state.tunnel_status.lock().unwrap() {
-        TunnelStatus::Disconnected => "disconnected".to_string(),
-        TunnelStatus::Connecting => "connecting".to_string(),
-        TunnelStatus::Connected => "connected".to_string(),
-        TunnelStatus::Error(msg) => format!("error: {msg}"),
+        TunnelStatus::Disconnected => "Disconnected".to_string(),
+        TunnelStatus::Connecting => "Connecting".to_string(),
+        TunnelStatus::Connected => "Connected".to_string(),
+        TunnelStatus::Error(msg) => format!("Error: {msg}"),
     }
 }
 
@@ -368,6 +570,12 @@ pub fn test_remote_connection(
 #[tauri::command]
 pub fn generate_remote_token() -> String {
     generate_token()
+}
+
+/// Tauri command: return the path to the SSH log file.
+#[tauri::command]
+pub fn get_ssh_log_path() -> String {
+    ssh_log_path()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -430,11 +638,11 @@ mod tests {
     fn make_ssh_config() -> SshConfig {
         SshConfig {
             host: "ssh.example.com".to_string(),
-            port: 22,
-            user: "alice".to_string(),
-            key_path: "/home/alice/.ssh/id_rsa".to_string(),
+            port: 21168,
+            user: "aicc".to_string(),
+            key_path: "/home/aicc/.ssh/id_rsa".to_string(),
             remote_port: 19876,
-            local_port: 9876,
+            local_port: 19876,
         }
     }
 
@@ -447,14 +655,14 @@ mod tests {
         // Verify the -R forwarding argument
         assert!(args.contains(&"-R".to_string()));
         let r_idx = args.iter().position(|a| a == "-R").unwrap();
-        assert_eq!(args[r_idx + 1], "19876:127.0.0.1:9876");
+        assert_eq!(args[r_idx + 1], "19876:127.0.0.1:19876");
 
         // Verify user@host
         assert!(args.contains(&format!("{}@{}", config.user, config.host)));
 
         // Verify port
         let p_idx = args.iter().position(|a| a == "-p").unwrap();
-        assert_eq!(args[p_idx + 1], "22");
+        assert_eq!(args[p_idx + 1], "21168");
 
         // Verify -N (no command)
         assert!(args.contains(&"-N".to_string()));
@@ -540,11 +748,11 @@ mod tests {
     fn test_hookconfig_remote_defaults() {
         let config = crate::setup::HookConfig::default();
         assert!(!config.remote_enabled);
-        assert_eq!(config.remote_port, 9876);
+        assert_eq!(config.remote_port, 19876);
         assert!(config.remote_token.is_empty());
         assert!(config.ssh_host.is_empty());
-        assert_eq!(config.ssh_port, 22);
-        assert!(config.ssh_user.is_empty());
+        assert_eq!(config.ssh_port, 21168);
+        assert_eq!(config.ssh_user, "aicc");
         assert!(config.ssh_key_path.is_empty());
         assert_eq!(config.ssh_remote_port, 19876);
         assert!(!config.ssh_auto_connect);
@@ -563,5 +771,31 @@ mod tests {
         let json = r#"not valid json"#;
         let result = serde_json::from_str::<NotifyRequest>(json);
         assert!(result.is_err(), "Invalid JSON must fail to parse");
+    }
+
+    // ── resolve_home_dir tests ──
+
+    #[test]
+    fn test_resolve_home_dir_tilde_slash() {
+        let resolved = resolve_home_dir("~/.ssh/id_rsa");
+        assert!(!resolved.starts_with("~"), "~ should be resolved");
+        assert!(resolved.ends_with(".ssh/id_rsa") || resolved.ends_with(".ssh\\id_rsa"));
+    }
+
+    #[test]
+    fn test_resolve_home_dir_tilde_backslash() {
+        let resolved = resolve_home_dir("~\\.ssh\\id_rsa");
+        assert!(!resolved.starts_with("~"), "~ should be resolved");
+    }
+
+    #[test]
+    fn test_resolve_home_dir_absolute_path_unchanged() {
+        let path = "C:\\Users\\admin\\.ssh\\id_rsa";
+        assert_eq!(resolve_home_dir(path), path);
+    }
+
+    #[test]
+    fn test_resolve_home_dir_empty_unchanged() {
+        assert_eq!(resolve_home_dir(""), "");
     }
 }

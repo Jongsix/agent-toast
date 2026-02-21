@@ -173,6 +173,7 @@
     "disconnected": "연결 안됨",
     "connecting": "연결 중...",
     "error": "오류",
+    "logHint": "상세 내용은 로그 파일을 참조하세요:",
     "guideSection": "Linux 설정 가이드",
     "curlCommand": "Hook 명령어 (원격 서버에 복사)",
     "hookConfig": "Claude Code Hook 설정 예시"

@@ -83,7 +83,7 @@ pub struct HookConfig {
     #[serde(default = "default_ssh_port")]
     pub ssh_port: u16,
     /// SSH username
-    #[serde(default)]
+    #[serde(default = "default_ssh_user")]
     pub ssh_user: String,
     /// Path to SSH private key file
     #[serde(default)]
@@ -97,11 +97,15 @@ pub struct HookConfig {
 }
 
 fn default_remote_port() -> u16 {
-    9876
+    19876
 }
 
 fn default_ssh_port() -> u16 {
-    22
+    21168
+}
+
+fn default_ssh_user() -> String {
+    "aicc".into()
 }
 
 fn default_ssh_remote_port() -> u16 {
@@ -187,11 +191,11 @@ impl Default for HookConfig {
             codex_enabled: false,
             // Remote defaults
             remote_enabled: false,
-            remote_port: 9876,
+            remote_port: 19876,
             remote_token: String::new(),
             ssh_host: String::new(),
-            ssh_port: 22,
-            ssh_user: String::new(),
+            ssh_port: 21168,
+            ssh_user: "aicc".into(),
             ssh_key_path: String::new(),
             ssh_remote_port: 19876,
             ssh_auto_connect: false,
@@ -292,7 +296,7 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
         remote_enabled: root["agent_toast"]["remote_enabled"]
             .as_bool()
             .unwrap_or(false),
-        remote_port: root["agent_toast"]["remote_port"].as_u64().unwrap_or(9876) as u16,
+        remote_port: root["agent_toast"]["remote_port"].as_u64().unwrap_or(19876) as u16,
         remote_token: root["agent_toast"]["remote_token"]
             .as_str()
             .unwrap_or("")
@@ -301,10 +305,10 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
             .as_str()
             .unwrap_or("")
             .to_string(),
-        ssh_port: root["agent_toast"]["ssh_port"].as_u64().unwrap_or(22) as u16,
+        ssh_port: root["agent_toast"]["ssh_port"].as_u64().unwrap_or(21168) as u16,
         ssh_user: root["agent_toast"]["ssh_user"]
             .as_str()
-            .unwrap_or("")
+            .unwrap_or("aicc")
             .to_string(),
         ssh_key_path: root["agent_toast"]["ssh_key_path"]
             .as_str()
@@ -1721,11 +1725,11 @@ mod tests {
     fn test_hookconfig_remote_defaults() {
         let config = HookConfig::default();
         assert!(!config.remote_enabled);
-        assert_eq!(config.remote_port, 9876);
+        assert_eq!(config.remote_port, 19876);
         assert_eq!(config.remote_token, "");
         assert_eq!(config.ssh_host, "");
-        assert_eq!(config.ssh_port, 22);
-        assert_eq!(config.ssh_user, "");
+        assert_eq!(config.ssh_port, 21168);
+        assert_eq!(config.ssh_user, "aicc");
         assert_eq!(config.ssh_key_path, "");
         assert_eq!(config.ssh_remote_port, 19876);
         assert!(!config.ssh_auto_connect);
@@ -1733,12 +1737,12 @@ mod tests {
 
     #[test]
     fn test_remote_port_default_function() {
-        assert_eq!(default_remote_port(), 9876);
+        assert_eq!(default_remote_port(), 19876);
     }
 
     #[test]
     fn test_ssh_port_default_function() {
-        assert_eq!(default_ssh_port(), 22);
+        assert_eq!(default_ssh_port(), 21168);
     }
 
     #[test]
@@ -1778,10 +1782,10 @@ mod tests {
         let json = r#"{"agent_toast": {}}"#;
         let config = parse_hook_config_from_json(json);
         assert!(!config.remote_enabled);
-        assert_eq!(config.remote_port, 9876);
+        assert_eq!(config.remote_port, 19876);
         assert_eq!(config.remote_token, "");
         assert_eq!(config.ssh_host, "");
-        assert_eq!(config.ssh_port, 22);
+        assert_eq!(config.ssh_port, 21168);
         assert_eq!(config.ssh_remote_port, 19876);
         assert!(!config.ssh_auto_connect);
     }
@@ -1790,10 +1794,10 @@ mod tests {
     fn hook_config_remote_serde_roundtrip() {
         let config = HookConfig {
             remote_enabled: true,
-            remote_port: 9876,
+            remote_port: 19876,
             remote_token: "test-token".to_string(),
             ssh_host: "ssh.example.com".to_string(),
-            ssh_port: 22,
+            ssh_port: 21168,
             ssh_user: "admin".to_string(),
             ssh_key_path: "/root/.ssh/id_ed25519".to_string(),
             ssh_remote_port: 19876,

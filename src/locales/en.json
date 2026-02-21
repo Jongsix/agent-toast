@@ -171,6 +171,7 @@
     "disconnected": "Disconnected",
     "connecting": "Connecting...",
     "error": "Error",
+    "logHint": "See log file for details:",
     "guideSection": "Linux Setup Guide",
     "curlCommand": "Hook Command (copy to remote server)",
     "hookConfig": "Claude Code Hook Example"

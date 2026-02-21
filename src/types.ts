@@ -48,15 +48,15 @@ export interface HookConfig {
   notification_monitor: string;
   locale: string;
   codex_enabled: boolean;
-  remoteEnabled: boolean;
-  remotePort: number;
-  remoteToken: string;
-  sshHost: string;
-  sshPort: number;
-  sshUser: string;
-  sshKeyPath: string;
-  sshRemotePort: number;
-  sshAutoConnect: boolean;
+  remote_enabled: boolean;
+  remote_port: number;
+  remote_token: string;
+  ssh_host: string;
+  ssh_port: number;
+  ssh_user: string;
+  ssh_key_path: string;
+  ssh_remote_port: number;
+  ssh_auto_connect: boolean;
 }
 
 export interface MonitorInfo {

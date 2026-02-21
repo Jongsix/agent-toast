@@ -76,15 +76,15 @@ const config = ref<HookConfig>({
   notification_monitor: "primary",
   locale: "ko",
   codex_enabled: false,
-  remoteEnabled: false,
-  remotePort: 9876,
-  remoteToken: "",
-  sshHost: "",
-  sshPort: 22,
-  sshUser: "",
-  sshKeyPath: "",
-  sshRemotePort: 19876,
-  sshAutoConnect: false,
+  remote_enabled: false,
+  remote_port: 19876,
+  remote_token: "",
+  ssh_host: "",
+  ssh_port: 21168,
+  ssh_user: "aicc",
+  ssh_key_path: "",
+  ssh_remote_port: 19876,
+  ssh_auto_connect: false,
 });
 
 watch(
@@ -133,6 +133,20 @@ onMounted(async () => {
     config.value.notification_monitor = saved.notification_monitor;
     config.value.locale = saved.locale;
     config.value.codex_enabled = saved.codex_enabled;
+    // Carry over remote settings even when hooks aren't saved yet
+    config.value.remote_enabled = saved.remote_enabled;
+    config.value.remote_port = saved.remote_port;
+    config.value.remote_token = saved.remote_token;
+    config.value.ssh_host = saved.ssh_host;
+    config.value.ssh_port = saved.ssh_port;
+    config.value.ssh_user = saved.ssh_user;
+    config.value.ssh_key_path = saved.ssh_key_path;
+    config.value.ssh_remote_port = saved.ssh_remote_port;
+    config.value.ssh_auto_connect = saved.ssh_auto_connect;
+  }
+  // Auto-generate token if empty
+  if (!config.value.remote_token) {
+    config.value.remote_token = await invoke<string>("generate_remote_token");
   }
   locale.value = config.value.locale;
   exePath.value = await invoke<string>("get_exe_path");
@@ -214,15 +228,15 @@ function onReset() {
     notification_monitor: "primary",
     locale: currentLocale,
     codex_enabled: false,
-    remoteEnabled: false,
-    remotePort: 9876,
-    remoteToken: "",
-    sshHost: "",
-    sshPort: 22,
-    sshUser: "",
-    sshKeyPath: "",
-    sshRemotePort: 19876,
-    sshAutoConnect: false,
+    remote_enabled: false,
+    remote_port: 19876,
+    remote_token: "",
+    ssh_host: "",
+    ssh_port: 21168,
+    ssh_user: "aicc",
+    ssh_key_path: "",
+    ssh_remote_port: 19876,
+    ssh_auto_connect: false,
   };
 }
 

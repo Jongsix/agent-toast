@@ -83,7 +83,7 @@ Enable desired events in the settings window to automatically register hooks.
 - Single-instance management via Named Pipe — first launch starts the app, subsequent CLI calls send JSON through the pipe and exit immediately
 - Real-time focus detection via Win32 API for automatic notification dismissal
 - Process tree traversal from `--pid` for improved terminal window detection accuracy
-- Remote notification forwarding via SSH reverse tunnel to local HTTP server (127.0.0.1:9876)
+- Remote notification forwarding via SSH reverse tunnel to local HTTP server (127.0.0.1:19876)
 
 ## 🛠️ Tech Stack
 

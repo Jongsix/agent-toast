@@ -24,6 +24,8 @@ pub struct RemoteState {
     pub ssh_tunnel: Arc<Mutex<Option<remote::SshTunnel>>>,
     /// True when the user explicitly disconnected the tunnel (suppress auto-reconnect).
     pub user_disconnected: Arc<Mutex<bool>>,
+    /// Port on which the HTTP notification server is currently listening (0 = not started).
+    pub http_server_port: Arc<Mutex<u16>>,
 }
 
 use tauri::image::Image;
@@ -247,6 +249,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
         tunnel_status: Arc::new(Mutex::new(remote::TunnelStatus::Disconnected)),
         ssh_tunnel: Arc::new(Mutex::new(None)),
         user_disconnected: Arc::new(Mutex::new(false)),
+        http_server_port: Arc::new(Mutex::new(0)),
     };
 
     tauri::Builder::default()
@@ -278,6 +281,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             remote::get_tunnel_status,
             remote::test_remote_connection,
             remote::generate_remote_token,
+            remote::get_ssh_log_path,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -364,6 +368,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                     let http_app = handle.clone();
                     let http_state = state.clone();
                     remote::start_http_server(port, token, http_app, http_state);
+                    *remote_st.http_server_port.lock().unwrap() = port;
 
                     // Optionally auto-connect SSH tunnel
                     if hook_config.ssh_auto_connect && !hook_config.ssh_host.is_empty() {
@@ -371,7 +376,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                             host: hook_config.ssh_host.clone(),
                             port: hook_config.ssh_port,
                             user: hook_config.ssh_user.clone(),
-                            key_path: hook_config.ssh_key_path.clone(),
+                            key_path: remote::resolve_home_dir(&hook_config.ssh_key_path),
                             remote_port: hook_config.ssh_remote_port,
                             local_port: hook_config.remote_port,
                         };
@@ -397,7 +402,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| match event {
+        .run(|app, event| match event {
             RunEvent::ExitRequested { api, code, .. } => {
                 log::warn!("[EXIT] ExitRequested: code={code:?}");
                 if code.is_none() {
@@ -408,6 +413,15 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             }
             RunEvent::Exit => {
                 log::warn!("[EXIT] App is shutting down (RunEvent::Exit)");
+                // Kill SSH tunnel process on exit
+                if let Some(remote_st) = app.try_state::<RemoteState>() {
+                    let status = remote_st.tunnel_status.clone();
+                    let mut guard = remote_st.ssh_tunnel.lock().unwrap();
+                    if let Some(ref mut tunnel) = *guard {
+                        log::info!("[EXIT] Disconnecting SSH tunnel before shutdown");
+                        tunnel.disconnect(status);
+                    }
+                }
             }
             _ => {}
         });
