@@ -555,8 +555,16 @@ pub fn connect_ssh_tunnel(
     match guard.as_mut() {
         Some(t) => {
             *tunnel_state.user_disconnected.lock().unwrap() = false;
-            let result = t.connect(status);
+            let result = t.connect(status.clone());
             log::info!("[SSH] connect result: {result:?}");
+            // Update tray icon immediately
+            let tray_status = match &*status.lock().unwrap() {
+                TunnelStatus::Connected => "Connected",
+                TunnelStatus::Connecting => "Connecting",
+                TunnelStatus::Disconnected => "Disconnected",
+                TunnelStatus::Error(_) => "Error",
+            };
+            crate::update_tray_status(&app, tray_status);
             result
         }
         None => Err("SSH tunnel not configured".to_string()),
@@ -566,6 +574,7 @@ pub fn connect_ssh_tunnel(
 /// Tauri command: disconnect the SSH tunnel.
 #[tauri::command]
 pub fn disconnect_ssh_tunnel(
+    app: AppHandle,
     tunnel_state: tauri::State<'_, crate::RemoteState>,
 ) -> Result<(), String> {
     let status = tunnel_state.tunnel_status.clone();
@@ -575,6 +584,7 @@ pub fn disconnect_ssh_tunnel(
         *tunnel_state.user_disconnected.lock().unwrap() = true;
         t.disconnect(status);
     }
+    crate::update_tray_status(&app, "Disconnected");
     Ok(())
 }
 

@@ -78,6 +78,8 @@ async function saveRemoteSettings() {
 
 async function connectTunnel() {
   try {
+    // Enable auto-connect so the tunnel reconnects on app restart
+    config.value.ssh_auto_connect = true;
     // Persist remote settings before connecting so they survive app restart
     await saveRemoteSettings();
     await invoke("connect_ssh_tunnel", {
@@ -99,6 +101,9 @@ async function connectTunnel() {
 
 async function disconnectTunnel() {
   try {
+    // Disable auto-connect so it stays disconnected on app restart
+    config.value.ssh_auto_connect = false;
+    await saveRemoteSettings();
     await invoke("disconnect_ssh_tunnel");
     await pollStatus();
   } catch (e) {

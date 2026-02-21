@@ -341,9 +341,16 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
         ssh_remote_port: root["agent_toast"]["ssh_remote_port"]
             .as_u64()
             .unwrap_or(19876) as u16,
-        ssh_auto_connect: root["agent_toast"]["ssh_auto_connect"]
-            .as_bool()
-            .unwrap_or(false),
+        ssh_auto_connect: root["agent_toast"]
+            .get("ssh_auto_connect")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| {
+                // Migration: default to true if SSH host is already configured
+                !root["agent_toast"]["ssh_host"]
+                    .as_str()
+                    .unwrap_or("")
+                    .is_empty()
+            }),
         notification_opacity: root["agent_toast"]["notification_opacity"]
             .as_u64()
             .unwrap_or(60) as u32,
@@ -1888,6 +1895,34 @@ mod tests {
         assert_eq!(config.ssh_host, "");
         assert_eq!(config.ssh_port, 21168);
         assert_eq!(config.ssh_remote_port, 19876);
+        assert!(!config.ssh_auto_connect);
+    }
+
+    #[test]
+    fn parse_remote_auto_connect_migration_with_host() {
+        // Migration: ssh_auto_connect absent but ssh_host configured → default true
+        let json = r#"{
+            "agent_toast": {
+                "remote_enabled": true,
+                "ssh_host": "example.com",
+                "ssh_user": "myuser"
+            }
+        }"#;
+        let config = parse_hook_config_from_json(json);
+        assert!(config.ssh_auto_connect);
+    }
+
+    #[test]
+    fn parse_remote_auto_connect_explicit_false() {
+        // Explicit false: ssh_auto_connect is false even with ssh_host set
+        let json = r#"{
+            "agent_toast": {
+                "remote_enabled": true,
+                "ssh_host": "example.com",
+                "ssh_auto_connect": false
+            }
+        }"#;
+        let config = parse_hook_config_from_json(json);
         assert!(!config.ssh_auto_connect);
     }
 

@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Moon, RotateCcw, Sun } from "lucide-vue-next";
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { toast, Toaster } from "vue-sonner";
 import "vue-sonner/style.css";
@@ -97,6 +97,73 @@ watch(
   },
 );
 
+// Remote status polling for header indicator
+const tunnelStatus = ref("Disconnected");
+let statusInterval: ReturnType<typeof setInterval> | null = null;
+
+async function pollTunnelStatus() {
+  try {
+    tunnelStatus.value = await invoke<string>("get_tunnel_status");
+  } catch {
+    tunnelStatus.value = "Error";
+  }
+}
+
+function startStatusPolling() {
+  if (!statusInterval) {
+    pollTunnelStatus();
+    statusInterval = setInterval(pollTunnelStatus, 2000);
+  }
+}
+
+function stopStatusPolling() {
+  if (statusInterval) {
+    clearInterval(statusInterval);
+    statusInterval = null;
+  }
+  tunnelStatus.value = "Disconnected";
+}
+
+watch(
+  () => config.value.remote_enabled,
+  (enabled) => {
+    if (enabled) startStatusPolling();
+    else stopStatusPolling();
+  },
+);
+
+onUnmounted(() => stopStatusPolling());
+
+const statusDotColor = computed(() => {
+  switch (tunnelStatus.value) {
+    case "Connected":
+      return "bg-green-500";
+    case "Connecting":
+      return "bg-amber-500 animate-pulse";
+    default:
+      if (
+        tunnelStatus.value !== "Disconnected" &&
+        tunnelStatus.value !== "Connected" &&
+        tunnelStatus.value !== "Connecting"
+      )
+        return "bg-red-500";
+      return "bg-muted-foreground/40";
+  }
+});
+
+const statusTooltip = computed(() => {
+  switch (tunnelStatus.value) {
+    case "Connected":
+      return t("remote.connected");
+    case "Connecting":
+      return t("remote.connecting");
+    case "Disconnected":
+      return t("remote.disconnected");
+    default:
+      return t("remote.error");
+  }
+});
+
 const configSaved = ref(true);
 const exePath = ref("");
 const savedExePath = ref<string | null>(null);
@@ -155,6 +222,7 @@ onMounted(async () => {
     config.value.remote_token = await invoke<string>("generate_remote_token");
   }
   locale.value = config.value.locale;
+  if (config.value.remote_enabled) startStatusPolling();
   exePath.value = await invoke<string>("get_exe_path");
   savedExePath.value = await invoke<string | null>("get_saved_exe_path");
   isDevMode.value = await invoke<boolean>("is_dev_mode");
@@ -274,6 +342,19 @@ async function onClose() {
           >
         </div>
         <div class="flex items-center gap-1">
+          <span
+            v-if="config.remote_enabled"
+            :title="statusTooltip"
+            class="flex items-center justify-center w-7 h-7 cursor-default"
+            @click="activeTab = 'remote'"
+          >
+            <span
+              :class="[
+                'inline-block w-2.5 h-2.5 rounded-full ring-1 ring-foreground/10 transition-colors',
+                statusDotColor,
+              ]"
+            />
+          </span>
           <Button
             variant="ghost"
             size="icon-sm"

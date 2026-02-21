@@ -39,6 +39,78 @@ pub struct TrayMenuState {
     pub quit_item: MenuItem<tauri::Wry>,
 }
 
+/// Generate a 16×16 RGBA status indicator icon for the system tray.
+fn generate_tray_status_icon(status: &str) -> Vec<u8> {
+    let size: usize = 16;
+    let mut rgba = vec![0u8; size * size * 4];
+
+    let (r, g, b) = match status {
+        "Connected" => (34u8, 197, 94),   // green-500
+        "Connecting" => (245, 158, 11),   // amber-500
+        _ => (239, 68, 68),               // red-500 (error)
+    };
+
+    let center = (size as f32 - 1.0) / 2.0;
+    let inner_r = 5.5f32;
+    let outer_r = 7.0f32;
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let idx = (y * size + x) * 4;
+
+            if dist <= inner_r {
+                let alpha = if dist > inner_r - 1.0 {
+                    ((inner_r - dist) * 255.0).min(255.0) as u8
+                } else {
+                    255
+                };
+                rgba[idx] = r;
+                rgba[idx + 1] = g;
+                rgba[idx + 2] = b;
+                rgba[idx + 3] = alpha;
+            } else if dist <= outer_r {
+                let alpha = if dist > outer_r - 1.0 {
+                    ((outer_r - dist) * 180.0).min(180.0) as u8
+                } else {
+                    180
+                };
+                rgba[idx] = 255;
+                rgba[idx + 1] = 255;
+                rgba[idx + 2] = 255;
+                rgba[idx + 3] = alpha;
+            }
+        }
+    }
+    rgba
+}
+
+/// Update system tray icon and tooltip based on SSH tunnel status.
+pub fn update_tray_status(app: &AppHandle, status: &str) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let tooltip = match status {
+            "Connected" => "Agent Toast - SSH Connected",
+            "Connecting" => "Agent Toast - SSH Connecting...",
+            "Disconnected" => "Agent Toast",
+            _ => "Agent Toast - SSH Error",
+        };
+        let _ = tray.set_tooltip(Some(tooltip));
+
+        if status == "Disconnected" {
+            let icon_bytes = include_bytes!("../icons/tray.ico");
+            if let Ok(icon) = Image::from_bytes(icon_bytes) {
+                let _ = tray.set_icon(Some(icon));
+            }
+        } else {
+            let rgba = generate_tray_status_icon(status);
+            let icon = Image::new_owned(rgba, 16, 16);
+            let _ = tray.set_icon(Some(icon));
+        }
+    }
+}
+
 /// Update tray menu text to match the current locale.
 pub fn update_tray_locale(app: &AppHandle) {
     let locale = setup::read_locale();
@@ -313,7 +385,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             // - 관련 이슈: https://github.com/tauri-apps/tauri/issues/14596
             let tray_icon_bytes = include_bytes!("../icons/tray.ico");
             let tray_icon = Image::from_bytes(tray_icon_bytes).expect("failed to load tray icon");
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .menu(&menu)
                 .tooltip("Agent Toast")
@@ -378,8 +450,8 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                     );
                     *remote_st.http_server_port.lock().unwrap() = port;
 
-                    // Optionally auto-connect SSH tunnel
-                    if hook_config.ssh_auto_connect && !hook_config.ssh_host.is_empty() {
+                    // Auto-connect SSH tunnel if host is configured
+                    if !hook_config.ssh_host.is_empty() {
                         let ssh_config = remote::SshConfig {
                             host: hook_config.ssh_host.clone(),
                             port: hook_config.ssh_port,
@@ -403,6 +475,43 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                         let auto_reconnect = hook_config.ssh_auto_connect;
                         remote::start_watchdog(tunnel_arc, status_arc, auto_reconnect);
                     }
+
+                    // Start tray status polling thread
+                    let poll_status = remote_st.tunnel_status.clone();
+                    let poll_app = handle.clone();
+                    std::thread::spawn(move || {
+                        let mut last = String::new();
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            let current = {
+                                let s = poll_status.lock().unwrap();
+                                match &*s {
+                                    remote::TunnelStatus::Connected => "Connected",
+                                    remote::TunnelStatus::Connecting => "Connecting",
+                                    remote::TunnelStatus::Disconnected => "Disconnected",
+                                    remote::TunnelStatus::Error(_) => "Error",
+                                }
+                                .to_string()
+                            };
+                            if current != last {
+                                update_tray_status(&poll_app, &current);
+                                last = current;
+                            }
+                        }
+                    });
+
+                    // Set initial tray status
+                    let init_status = {
+                        let s = remote_st.tunnel_status.lock().unwrap();
+                        match &*s {
+                            remote::TunnelStatus::Connected => "Connected",
+                            remote::TunnelStatus::Connecting => "Connecting",
+                            remote::TunnelStatus::Disconnected => "Disconnected",
+                            remote::TunnelStatus::Error(_) => "Error",
+                        }
+                        .to_string()
+                    };
+                    update_tray_status(&handle, &init_status);
                 }
             }
 
