@@ -94,6 +94,15 @@ pub struct HookConfig {
     /// Automatically connect SSH tunnel on startup
     #[serde(default)]
     pub ssh_auto_connect: bool,
+    /// Notification window background opacity (20-100, percent)
+    #[serde(default = "default_notification_opacity")]
+    pub notification_opacity: u32,
+    /// Notification window background color (HEX: #RRGGBB)
+    #[serde(default = "default_notification_bg_color")]
+    pub notification_bg_color: String,
+    /// Notification window text color (HEX: #RRGGBB)
+    #[serde(default = "default_notification_text_color")]
+    pub notification_text_color: String,
 }
 
 fn default_remote_port() -> u16 {
@@ -110,6 +119,18 @@ fn default_ssh_user() -> String {
 
 fn default_ssh_remote_port() -> u16 {
     19876
+}
+
+fn default_notification_opacity() -> u32 {
+    60
+}
+
+fn default_notification_bg_color() -> String {
+    "#1a1a2e".to_string()
+}
+
+fn default_notification_text_color() -> String {
+    "#ffffff".to_string()
 }
 
 fn default_title_display_mode() -> String {
@@ -199,6 +220,9 @@ impl Default for HookConfig {
             ssh_key_path: String::new(),
             ssh_remote_port: 19876,
             ssh_auto_connect: false,
+            notification_opacity: 60,
+            notification_bg_color: "#1a1a2e".into(),
+            notification_text_color: "#ffffff".into(),
         }
     }
 }
@@ -320,6 +344,17 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
         ssh_auto_connect: root["agent_toast"]["ssh_auto_connect"]
             .as_bool()
             .unwrap_or(false),
+        notification_opacity: root["agent_toast"]["notification_opacity"]
+            .as_u64()
+            .unwrap_or(60) as u32,
+        notification_bg_color: root["agent_toast"]["notification_bg_color"]
+            .as_str()
+            .unwrap_or("#1a1a2e")
+            .to_string(),
+        notification_text_color: root["agent_toast"]["notification_text_color"]
+            .as_str()
+            .unwrap_or("#ffffff")
+            .to_string(),
         // 나머지는 Default에서 가져오기
         ..HookConfig::default()
     };
@@ -865,6 +900,18 @@ pub fn save_hook_config(
         "ssh_auto_connect".into(),
         Value::Bool(config.ssh_auto_connect),
     );
+    cn.insert(
+        "notification_opacity".into(),
+        Value::Number(config.notification_opacity.into()),
+    );
+    cn.insert(
+        "notification_bg_color".into(),
+        Value::String(config.notification_bg_color),
+    );
+    cn.insert(
+        "notification_text_color".into(),
+        Value::String(config.notification_text_color),
+    );
     root["agent_toast"] = Value::Object(cn);
 
     // Ensure .claude directory exists
@@ -1007,6 +1054,57 @@ pub fn read_locale() -> String {
         .as_str()
         .unwrap_or("ko")
         .to_string()
+}
+
+/// Save only the remote-related settings to ~/.claude/settings.json.
+/// Unlike save_hook_config, this does NOT rebuild hooks — it only updates
+/// the agent_toast section's remote fields and is safe to call from the
+/// Connect button without triggering a full save.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(rename_all = "snake_case")]
+pub fn save_remote_config(
+    remote_enabled: bool,
+    remote_port: u16,
+    remote_token: String,
+    ssh_host: String,
+    ssh_port: u16,
+    ssh_user: String,
+    ssh_key_path: String,
+    ssh_remote_port: u16,
+    ssh_auto_connect: bool,
+) -> Result<(), String> {
+    let path = settings_path();
+
+    let mut root: Value = if let Ok(content) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&content).unwrap_or_else(|_| Value::Object(Default::default()))
+    } else {
+        Value::Object(Default::default())
+    };
+
+    let mut cn = root["agent_toast"].as_object().cloned().unwrap_or_default();
+    cn.insert("remote_enabled".into(), Value::Bool(remote_enabled));
+    cn.insert("remote_port".into(), Value::Number(remote_port.into()));
+    cn.insert("remote_token".into(), Value::String(remote_token));
+    cn.insert("ssh_host".into(), Value::String(ssh_host));
+    cn.insert("ssh_port".into(), Value::Number(ssh_port.into()));
+    cn.insert("ssh_user".into(), Value::String(ssh_user));
+    cn.insert("ssh_key_path".into(), Value::String(ssh_key_path));
+    cn.insert(
+        "ssh_remote_port".into(),
+        Value::Number(ssh_remote_port.into()),
+    );
+    cn.insert("ssh_auto_connect".into(), Value::Bool(ssh_auto_connect));
+    root["agent_toast"] = Value::Object(cn);
+
+    // Ensure .claude directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let json = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
+    std::fs::write(&path, &json).map_err(|e| e.to_string())?;
+    log::info!("[SETUP] Remote config saved to {}", path.display());
+    Ok(())
 }
 
 fn codex_config_path() -> PathBuf {
@@ -1733,6 +1831,9 @@ mod tests {
         assert_eq!(config.ssh_key_path, "");
         assert_eq!(config.ssh_remote_port, 19876);
         assert!(!config.ssh_auto_connect);
+        assert_eq!(config.notification_opacity, 60);
+        assert_eq!(config.notification_bg_color, "#1a1a2e");
+        assert_eq!(config.notification_text_color, "#ffffff");
     }
 
     #[test]

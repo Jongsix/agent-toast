@@ -85,6 +85,9 @@ const config = ref<HookConfig>({
   ssh_key_path: "",
   ssh_remote_port: 19876,
   ssh_auto_connect: false,
+  notification_opacity: 60,
+  notification_bg_color: '#1a1a2e',
+  notification_text_color: '#ffffff',
 });
 
 watch(
@@ -143,6 +146,9 @@ onMounted(async () => {
     config.value.ssh_key_path = saved.ssh_key_path;
     config.value.ssh_remote_port = saved.ssh_remote_port;
     config.value.ssh_auto_connect = saved.ssh_auto_connect;
+    config.value.notification_opacity = saved.notification_opacity;
+    config.value.notification_bg_color = saved.notification_bg_color;
+    config.value.notification_text_color = saved.notification_text_color;
   }
   // Auto-generate token if empty
   if (!config.value.remote_token) {
@@ -237,6 +243,9 @@ function onReset() {
     ssh_key_path: "",
     ssh_remote_port: 19876,
     ssh_auto_connect: false,
+    notification_opacity: 60,
+    notification_bg_color: '#1a1a2e',
+    notification_text_color: '#ffffff',
   };
 }
 

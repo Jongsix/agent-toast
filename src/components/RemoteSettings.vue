@@ -57,11 +57,29 @@ watch(
       statusInterval = null;
       tunnelStatus.value = "Disconnected";
     }
+    // Persist the enabled/disabled state immediately
+    saveRemoteSettings().catch(() => {});
   },
 );
 
+async function saveRemoteSettings() {
+  await invoke("save_remote_config", {
+    remote_enabled: config.value.remote_enabled,
+    remote_port: config.value.remote_port,
+    remote_token: config.value.remote_token,
+    ssh_host: config.value.ssh_host,
+    ssh_port: config.value.ssh_port,
+    ssh_user: config.value.ssh_user,
+    ssh_key_path: config.value.ssh_key_path,
+    ssh_remote_port: config.value.ssh_remote_port,
+    ssh_auto_connect: config.value.ssh_auto_connect,
+  });
+}
+
 async function connectTunnel() {
   try {
+    // Persist remote settings before connecting so they survive app restart
+    await saveRemoteSettings();
     await invoke("connect_ssh_tunnel", {
       ssh_host: config.value.ssh_host,
       ssh_port: config.value.ssh_port,
@@ -425,6 +443,23 @@ const statusLabel = computed(() => {
             class="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-0.5"
             >{{ t("remote.guideSection") }}</span
           >
+
+          <!-- sshd_config GatewayPorts -->
+          <div
+            class="flex flex-col gap-2 bg-card border rounded-[10px] px-3.5 py-3"
+          >
+            <span class="text-xs font-medium text-foreground">{{
+              t("remote.sshdConfigTitle")
+            }}</span>
+            <p class="text-[11px] text-muted-foreground">{{ t("remote.sshdConfigDesc") }}</p>
+            <pre
+              class="text-[10px] font-mono text-muted-foreground bg-muted rounded p-2 overflow-x-auto whitespace-pre-wrap break-all"
+>GatewayPorts yes</pre>
+            <p class="text-[11px] text-muted-foreground">{{ t("remote.sshdConfigRestart") }}</p>
+            <pre
+              class="text-[10px] font-mono text-muted-foreground bg-muted rounded p-2 overflow-x-auto whitespace-pre-wrap break-all"
+>sudo systemctl restart sshd</pre>
+          </div>
 
           <!-- curl command -->
           <div

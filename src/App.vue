@@ -13,6 +13,12 @@ import type { NotificationData } from "./types";
 
 const { t, locale } = useI18n();
 
+const styleSettings = ref({
+  opacity: 60,
+  bgColor: '#1a1a2e',
+  textColor: '#ffffff',
+});
+
 type EventType = "default" | "success" | "warning" | "error" | "codex";
 
 const notification = ref<NotificationData | null>(null);
@@ -141,6 +147,17 @@ function showNotification() {
   });
 }
 
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const overlayStyle = computed(() => ({
+  backgroundColor: hexToRgba(styleSettings.value.bgColor, styleSettings.value.opacity / 100),
+}));
+
 onMounted(async () => {
   try {
     const savedLocale = await invoke<string>("get_locale");
@@ -149,6 +166,15 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
+
+  try {
+    const config = await invoke<any>("get_hook_config");
+    styleSettings.value = {
+      opacity: config.notification_opacity ?? 60,
+      bgColor: config.notification_bg_color ?? '#1a1a2e',
+      textColor: config.notification_text_color ?? '#ffffff',
+    };
+  } catch { /* use defaults */ }
 
   const data = await invoke<NotificationData | null>("get_notification_data");
   if (data) {
@@ -226,7 +252,8 @@ async function onClose() {
 <template>
   <div
     v-if="notification"
-    class="h-screen flex rounded-xl overflow-hidden bg-overlay-bg select-none opacity-0 translate-x-5 transition-all duration-300 ease-out"
+    class="h-screen flex rounded-xl overflow-hidden select-none opacity-0 translate-x-5 transition-all duration-300 ease-out"
+    :style="overlayStyle"
     :class="{ 'opacity-100! translate-x-0!': show }"
   >
     <!-- Accent bar -->
@@ -286,7 +313,8 @@ async function onClose() {
           >
         </div>
         <button
-          class="size-6 flex items-center justify-center rounded-md text-white/50 hover:text-white/80 hover:bg-white/10 transition-colors"
+          class="size-6 flex items-center justify-center rounded-md hover:bg-white/10 transition-colors"
+          :style="{ color: styleSettings.textColor, opacity: 0.5 }"
           @click="onClose"
           :aria-label="t('notification.close')"
         >
@@ -297,13 +325,23 @@ async function onClose() {
       <!-- Body -->
       <div class="flex flex-col gap-0.5 min-w-0">
         <div
-          class="text-[14px] font-medium text-white/90 truncate leading-snug"
+          class="text-[14px] font-medium truncate leading-snug"
+          :style="{ color: styleSettings.textColor, opacity: 0.9 }"
         >
           {{ notification.window_title }}
         </div>
+        <!-- Remote server host -->
+        <div
+          v-if="notification.source === 'remote' && notification.remote_host"
+          class="text-[11px] truncate leading-snug"
+          :style="{ color: styleSettings.textColor, opacity: 0.5 }"
+        >
+          {{ notification.remote_host }}
+        </div>
         <div
           v-if="notification.message"
-          class="text-xs text-white/60 truncate leading-snug"
+          class="text-xs truncate leading-snug"
+          :style="{ color: styleSettings.textColor, opacity: 0.6 }"
         >
           {{ notification.message }}
         </div>
@@ -320,7 +358,8 @@ async function onClose() {
           {{ viewButtonText }}
         </button>
         <button
-          class="flex-1 py-1.5 text-[13px] font-medium rounded-md bg-white/15 text-white/80 border border-white/20 hover:bg-white/25 transition-colors"
+          class="flex-1 py-1.5 text-[13px] font-medium rounded-md bg-white/15 border border-white/20 hover:bg-white/25 transition-colors"
+          :style="{ color: styleSettings.textColor, opacity: 0.8 }"
           @click="onClose"
         >
           {{ t("notification.close") }}

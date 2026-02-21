@@ -24,6 +24,7 @@ pub struct NotificationData {
     pub process_tree: Vec<u32>,
     pub auto_dismiss_seconds: u32,
     pub source: String,
+    pub remote_host: Option<String>,
 }
 
 pub struct NotificationManager {
@@ -152,6 +153,7 @@ pub fn show_notification(
         process_tree,
         auto_dismiss_seconds,
         source: request.source.clone(),
+        remote_host: request.remote_host.clone(),
     };
 
     // Calculate position: stack from bottom-right
@@ -368,6 +370,7 @@ mod tests {
             process_tree: vec![100, 200, 300],
             auto_dismiss_seconds: 30,
             source: "claude".to_string(),
+            remote_host: Some("dev.example.com".to_string()),
         };
         let json = serde_json::to_string(&data).unwrap();
         let deserialized: NotificationData = serde_json::from_str(&json).unwrap();
@@ -379,6 +382,7 @@ mod tests {
         assert_eq!(deserialized.process_tree, vec![100, 200, 300]);
         assert_eq!(deserialized.auto_dismiss_seconds, 30);
         assert_eq!(deserialized.source, "claude");
+        assert_eq!(deserialized.remote_host.as_deref(), Some("dev.example.com"));
     }
 
     #[test]
@@ -392,6 +396,7 @@ mod tests {
             process_tree: vec![],
             auto_dismiss_seconds: 0,
             source: "codex".to_string(),
+            remote_host: None,
         };
         let json = serde_json::to_string(&data).unwrap();
         let deserialized: NotificationData = serde_json::from_str(&json).unwrap();
@@ -410,6 +415,7 @@ mod tests {
             process_tree: vec![],
             auto_dismiss_seconds: 0,
             source: "updater".to_string(),
+            remote_host: None,
         };
         assert!(data.process_tree.is_empty());
     }
@@ -425,6 +431,7 @@ mod tests {
             process_tree: vec![1, 2, 3],
             auto_dismiss_seconds: 10,
             source: "claude".to_string(),
+            remote_host: None,
         };
         let json = serde_json::to_string(&data).unwrap();
         let deserialized: NotificationData = serde_json::from_str(&json).unwrap();
@@ -478,6 +485,7 @@ mod tests {
                 process_tree: vec![],
                 auto_dismiss_seconds: 0,
                 source: "claude".to_string(),
+                remote_host: None,
             });
         }
         let result = get_notification_for_window(&state, "notify-1");
@@ -501,6 +509,7 @@ mod tests {
                 process_tree: vec![],
                 auto_dismiss_seconds: 0,
                 source: "claude".to_string(),
+                remote_host: None,
             });
             mgr.notifications.push(NotificationData {
                 id: "notify-2".to_string(),
@@ -511,6 +520,7 @@ mod tests {
                 process_tree: vec![],
                 auto_dismiss_seconds: 0,
                 source: "claude".to_string(),
+                remote_host: None,
             });
         }
 
@@ -584,6 +594,7 @@ mod tests {
                 process_tree: vec![],
                 auto_dismiss_seconds: 0,
                 source: source.to_string(),
+                remote_host: None,
             };
             assert_eq!(data.source, source);
         }
@@ -601,6 +612,7 @@ mod tests {
                 process_tree: vec![],
                 auto_dismiss_seconds: seconds,
                 source: "claude".to_string(),
+                remote_host: None,
             };
             assert_eq!(data.auto_dismiss_seconds, seconds);
         }
@@ -617,6 +629,7 @@ mod tests {
             process_tree: vec![100, 200, 300],
             auto_dismiss_seconds: 30,
             source: "claude".to_string(),
+            remote_host: None,
         };
         let cloned = data.clone();
         assert_eq!(cloned.id, data.id);

@@ -166,6 +166,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -195,6 +196,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -223,6 +225,7 @@ mod tests {
             title_hint: Some("my-project".to_string()),
             process_tree: Some(vec![100, 200, 300, 400]),
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -241,6 +244,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -266,6 +270,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -287,6 +292,7 @@ mod tests {
                 title_hint: None,
                 process_tree: None,
                 source: source.into(),
+                remote_host: None,
             };
 
             let data = serde_json::to_vec(&req).unwrap();
@@ -304,6 +310,7 @@ mod tests {
             title_hint: Some("my-awesome-project".to_string()),
             process_tree: Some(vec![1000, 2000, 3000, 4000, 5000]),
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -338,6 +345,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -355,6 +363,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -372,6 +381,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();
@@ -396,6 +406,7 @@ mod tests {
             title_hint: Some("B".repeat(1000)),
             process_tree: Some(big_tree),
             source: "claude".into(),
+            remote_host: None,
         };
 
         let data = serde_json::to_vec(&req).unwrap();

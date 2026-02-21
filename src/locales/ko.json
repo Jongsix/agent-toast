@@ -57,7 +57,11 @@
     "disabled": "비활성",
     "sound": "알림 소리",
     "test_notification": "테스트 알림 띄우기",
-    "language": "언어 / Language"
+    "language": "언어 / Language",
+    "styleSection": "알림 스타일",
+    "opacity": "배경 불투명도 (%)",
+    "bgColor": "배경색",
+    "textColor": "텍스트 색상"
   },
   "hooks": {
     "desc": "활성화할 훅 이벤트를 선택하고 메시지를 설정하세요.",
@@ -175,6 +179,9 @@
     "error": "오류",
     "logHint": "상세 내용은 로그 파일을 참조하세요:",
     "guideSection": "Linux 설정 가이드",
+    "sshdConfigTitle": "SSH 서버 설정 (필수)",
+    "sshdConfigDesc": "다른 서버에서 터널 포트에 접근하려면 SSH 서버의 /etc/ssh/sshd_config에 다음 설정이 필요합니다:",
+    "sshdConfigRestart": "설정 변경 후 SSH 서비스를 재시작하세요:",
     "curlCommand": "Hook 명령어 (원격 서버에 복사)",
     "hookConfig": "Claude Code Hook 설정 예시"
   },

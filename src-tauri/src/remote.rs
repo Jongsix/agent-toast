@@ -150,11 +150,11 @@ impl SshTunnel {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-                let msg = format!("Failed to spawn ssh: {e}");
-                *status.lock().unwrap() = TunnelStatus::Error(msg.clone());
-                log::error!("[SSH] {msg}");
-                msg
-            })?;
+            let msg = format!("Failed to spawn ssh: {e}");
+            *status.lock().unwrap() = TunnelStatus::Error(msg.clone());
+            log::error!("[SSH] {msg}");
+            msg
+        })?;
 
         // Wait briefly for early exit (auth failure, connection refused, etc.)
         let wait_ms = 3000u64;
@@ -179,7 +179,10 @@ impl SshTunnel {
 
                     let msg = format!(
                         "SSH connection failed (exit {}). Details: {}",
-                        exit_status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()),
+                        exit_status
+                            .code()
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "signal".into()),
                         log_path,
                     );
                     *status.lock().unwrap() = TunnelStatus::Error(msg.clone());
@@ -204,7 +207,7 @@ impl SshTunnel {
 
         self.process = Some(child);
         *status.lock().unwrap() = TunnelStatus::Connected;
-        log::info!("[SSH] Tunnel process spawned and alive after {}ms", wait_ms);
+        log::info!("[SSH] Tunnel process spawned and alive after {wait_ms}ms");
         Ok(())
     }
 
@@ -277,13 +280,19 @@ pub fn start_watchdog(
 ///   Body: JSON NotifyRequest
 ///
 /// The `source` field in the body is always overridden to "remote".
+/// The `remote_host` field is set to `ssh_host` so the frontend can display
+/// which server the notification originated from.
 pub fn start_http_server(
     port: u16,
     token: String,
     app: AppHandle,
     state: NotificationManagerState,
+    ssh_host: String,
 ) {
-    log::info!("[HTTP] Starting remote notification server on port {port} (token configured: {})", !token.is_empty());
+    log::info!(
+        "[HTTP] Starting remote notification server on port {port} (token configured: {})",
+        !token.is_empty()
+    );
     std::thread::spawn(move || {
         let addr = format!("127.0.0.1:{port}");
         let server = match tiny_http::Server::http(&addr) {
@@ -299,7 +308,7 @@ pub fn start_http_server(
 
         log::info!("[HTTP] Server ready, waiting for incoming requests...");
         for request in server.incoming_requests() {
-            handle_http_request(request, &token, &app, &state);
+            handle_http_request(request, &token, &app, &state, &ssh_host);
         }
         log::warn!("[HTTP] Server loop ended unexpectedly");
     });
@@ -311,10 +320,14 @@ fn handle_http_request(
     token: &str,
     app: &AppHandle,
     state: &NotificationManagerState,
+    ssh_host: &str,
 ) {
     let method = request.method().to_string();
     let url = request.url().to_string();
-    let remote_addr = request.remote_addr().map(|a| a.to_string()).unwrap_or_else(|| "unknown".into());
+    let remote_addr = request
+        .remote_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "unknown".into());
 
     log::info!("[HTTP] Incoming request: {method} {url} from {remote_addr}");
 
@@ -344,7 +357,10 @@ fn handle_http_request(
         .headers()
         .iter()
         .any(|h| h.field.equiv("X-Agent-Toast-Token"));
-    log::info!("[HTTP] Token header present: {has_token_header}, token configured: {}", !token.is_empty());
+    log::info!(
+        "[HTTP] Token header present: {has_token_header}, token configured: {}",
+        !token.is_empty()
+    );
 
     if token.is_empty() || provided_token != token {
         log::warn!("[HTTP] 401 Unauthorized: token mismatch (header present: {has_token_header})");
@@ -359,7 +375,11 @@ fn handle_http_request(
         respond_status(request, 400, "Bad Request");
         return;
     }
-    log::info!("[HTTP] Request body ({} bytes): {}", body.len(), &body[..body.len().min(500)]);
+    log::info!(
+        "[HTTP] Request body ({} bytes): {}",
+        body.len(),
+        &body[..body.len().min(500)]
+    );
 
     // Deserialize the notify request
     let mut notify_req: NotifyRequest = match serde_json::from_str(&body) {
@@ -373,6 +393,11 @@ fn handle_http_request(
 
     // Force source to "remote" regardless of what was sent
     notify_req.source = "remote".to_string();
+    notify_req.remote_host = if ssh_host.is_empty() {
+        None
+    } else {
+        Some(ssh_host.to_string())
+    };
 
     log::info!(
         "[HTTP] 200 OK: showing notification event={}, pid={}, message={:?}",
@@ -416,8 +441,14 @@ fn write_ssh_log(path: &str, args: &[String], exit_code: Option<i32>, stderr: &s
          {}\n\
          --- end ---\n",
         args.join(" "),
-        exit_code.map(|c| c.to_string()).unwrap_or_else(|| "signal".into()),
-        if stderr.trim().is_empty() { "(no output)" } else { stderr.trim() },
+        exit_code
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "signal".into()),
+        if stderr.trim().is_empty() {
+            "(no output)"
+        } else {
+            stderr.trim()
+        },
     );
     log::error!("[SSH] {entry}");
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -447,6 +478,7 @@ pub fn resolve_home_dir(path: &str) -> String {
 
 /// Tauri command: connect the SSH tunnel.
 /// Accepts current UI config values so the user doesn't need to save first.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
 pub fn connect_ssh_tunnel(
     app: AppHandle,
@@ -484,6 +516,7 @@ pub fn connect_ssh_tunnel(
                 remote_token,
                 app.clone(),
                 notification_state.inner().clone(),
+                ssh_host.clone(),
             );
             *current_port = remote_port;
         } else {
@@ -509,16 +542,21 @@ pub fn connect_ssh_tunnel(
         remote_port: ssh_remote_port,
         local_port: remote_port,
     };
-    log::info!("[SSH] Creating new tunnel with config: {}@{}:{} -R {}:127.0.0.1:{}",
-        ssh_config.user, ssh_config.host, ssh_config.port,
-        ssh_config.remote_port, ssh_config.local_port);
+    log::info!(
+        "[SSH] Creating new tunnel with config: {}@{}:{} -R {}:127.0.0.1:{}",
+        ssh_config.user,
+        ssh_config.host,
+        ssh_config.port,
+        ssh_config.remote_port,
+        ssh_config.local_port
+    );
     *guard = Some(SshTunnel::new(ssh_config));
 
     match guard.as_mut() {
         Some(t) => {
             *tunnel_state.user_disconnected.lock().unwrap() = false;
             let result = t.connect(status);
-            log::info!("[SSH] connect result: {:?}", result);
+            log::info!("[SSH] connect result: {result:?}");
             result
         }
         None => Err("SSH tunnel not configured".to_string()),
@@ -655,7 +693,7 @@ mod tests {
         // Verify the -R forwarding argument
         assert!(args.contains(&"-R".to_string()));
         let r_idx = args.iter().position(|a| a == "-R").unwrap();
-        assert_eq!(args[r_idx + 1], "19876:127.0.0.1:19876");
+        assert_eq!(args[r_idx + 1], "*:19876:127.0.0.1:19876");
 
         // Verify user@host
         assert!(args.contains(&format!("{}@{}", config.user, config.host)));
@@ -729,6 +767,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".to_string(), // This would be overridden
+            remote_host: None,
         };
         // The server always forces source to "remote"
         req.source = "remote".to_string();

@@ -7,6 +7,7 @@ export interface NotificationData {
   process_tree: number[];
   auto_dismiss_seconds: number;
   source: string;
+  remote_host: string | null;
 }
 
 export interface HookConfig {
@@ -57,6 +58,9 @@ export interface HookConfig {
   ssh_key_path: string;
   ssh_remote_port: number;
   ssh_auto_connect: boolean;
+  notification_opacity: number;
+  notification_bg_color: string;
+  notification_text_color: string;
 }
 
 export interface MonitorInfo {

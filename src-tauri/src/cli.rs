@@ -52,6 +52,9 @@ pub struct NotifyRequest {
     /// Source of the notification: "claude" or "codex"
     #[serde(default = "default_source")]
     pub source: String,
+    /// Remote server host address (set by HTTP handler for remote notifications)
+    #[serde(default)]
+    pub remote_host: Option<String>,
 }
 
 fn default_source() -> String {
@@ -77,6 +80,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         }
     }
 
@@ -103,6 +107,7 @@ mod tests {
             title_hint: Some("my-project".to_string()),
             process_tree: Some(vec![100, 200, 300]),
             source: "claude".into(),
+            remote_host: Some("dev.example.com".to_string()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: NotifyRequest = serde_json::from_str(&json).unwrap();
@@ -111,6 +116,7 @@ mod tests {
         assert_eq!(deserialized.message.as_deref(), Some("빌드 완료"));
         assert_eq!(deserialized.title_hint.as_deref(), Some("my-project"));
         assert_eq!(deserialized.process_tree, Some(vec![100, 200, 300]));
+        assert_eq!(deserialized.remote_host.as_deref(), Some("dev.example.com"));
     }
 
     #[test]
@@ -163,6 +169,7 @@ mod tests {
             title_hint: None,
             process_tree: Some(tree.clone()),
             source: "claude".into(),
+            remote_host: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: NotifyRequest = serde_json::from_str(&json).unwrap();
@@ -178,6 +185,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: NotifyRequest = serde_json::from_str(&json).unwrap();
@@ -196,6 +204,7 @@ mod tests {
             title_hint: Some("프로젝트-이름".to_string()),
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: NotifyRequest = serde_json::from_str(&json).unwrap();
@@ -211,6 +220,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: NotifyRequest = serde_json::from_str(&json).unwrap();
@@ -226,6 +236,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "updater".into(),
+            remote_host: None,
         };
         assert_eq!(req.pid, 0);
     }
@@ -239,6 +250,7 @@ mod tests {
             title_hint: None,
             process_tree: None,
             source: "claude".into(),
+            remote_host: None,
         };
         assert_eq!(req.event, "");
         assert_eq!(req.event_display(), "");
@@ -271,6 +283,7 @@ mod tests {
             title_hint: Some("hint".to_string()),
             process_tree: Some(vec![1, 2, 3]),
             source: "claude".into(),
+            remote_host: None,
         };
         let cloned = req.clone();
         assert_eq!(cloned.pid, req.pid);

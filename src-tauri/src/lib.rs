@@ -123,6 +123,7 @@ fn test_notification(app: AppHandle) {
         title_hint: Some(test_title.to_string()),
         process_tree: Some(vec![]),
         source: "claude".into(),
+        remote_host: None,
     };
     log::debug!("[TEST] Spawning notification thread for event={event}");
     std::thread::spawn(move || {
@@ -276,6 +277,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             setup::get_codex_installed,
             get_monitor_list,
             updater::mark_update_pending,
+            setup::save_remote_config,
             remote::connect_ssh_tunnel,
             remote::disconnect_ssh_tunnel,
             remote::get_tunnel_status,
@@ -367,7 +369,13 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                     let token = hook_config.remote_token.clone();
                     let http_app = handle.clone();
                     let http_state = state.clone();
-                    remote::start_http_server(port, token, http_app, http_state);
+                    remote::start_http_server(
+                        port,
+                        token,
+                        http_app,
+                        http_state,
+                        hook_config.ssh_host.clone(),
+                    );
                     *remote_st.http_server_port.lock().unwrap() = port;
 
                     // Optionally auto-connect SSH tunnel

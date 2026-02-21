@@ -55,7 +55,11 @@
     "disabled": "Off",
     "sound": "Notification Sound",
     "test_notification": "Show Test Notification",
-    "language": "Language"
+    "language": "Language",
+    "styleSection": "Notification Style",
+    "opacity": "Background Opacity (%)",
+    "bgColor": "Background Color",
+    "textColor": "Text Color"
   },
   "hooks": {
     "desc": "Select hook events to enable and configure messages.",
@@ -173,6 +177,9 @@
     "error": "Error",
     "logHint": "See log file for details:",
     "guideSection": "Linux Setup Guide",
+    "sshdConfigTitle": "SSH Server Configuration (Required)",
+    "sshdConfigDesc": "To allow other servers to access the tunnel port, add the following to /etc/ssh/sshd_config on your SSH server:",
+    "sshdConfigRestart": "Restart the SSH service after changing the configuration:",
     "curlCommand": "Hook Command (copy to remote server)",
     "hookConfig": "Claude Code Hook Example"
   },

@@ -153,6 +153,7 @@ fn show_update_notification(app: &AppHandle, state: &NotificationManagerState, v
         title_hint: Some("Agent Toast".to_string()),
         process_tree: Some(vec![]),
         source: "updater".into(),
+        remote_host: None,
     };
 
     show_notification(app, state, req);
@@ -200,6 +201,7 @@ fn show_update_completed_notification(
         title_hint: Some("Agent Toast".to_string()),
         process_tree: Some(vec![]),
         source: "updater".into(),
+        remote_host: None,
     };
 
     show_notification(app, state, req);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   NumberField,
   NumberFieldContent,
@@ -197,6 +198,77 @@ onMounted(async () => {
           t("general.sound")
         }}</span>
         <Switch v-model="config.notification_sound" />
+      </div>
+
+      <!-- Notification Style section header -->
+      <p class="text-[13px] text-muted-foreground mt-2">{{ t("general.styleSection") }}</p>
+
+      <!-- Background Opacity -->
+      <div
+        class="flex items-center justify-between bg-card border rounded-[10px] px-3.5 py-3"
+      >
+        <span class="text-sm font-medium text-foreground">{{
+          t("general.opacity")
+        }}</span>
+        <NumberField
+          v-model="config.notification_opacity"
+          :min="20"
+          :max="100"
+          :step="5"
+          class="w-[100px]"
+        >
+          <NumberFieldContent>
+            <NumberFieldDecrement class="p-2" />
+            <NumberFieldInput class="h-7 text-xs" />
+            <NumberFieldIncrement class="p-2" />
+          </NumberFieldContent>
+        </NumberField>
+      </div>
+
+      <!-- Background Color -->
+      <div
+        class="flex items-center justify-between bg-card border rounded-[10px] px-3.5 py-3"
+      >
+        <span class="text-sm font-medium text-foreground">{{
+          t("general.bgColor")
+        }}</span>
+        <div class="flex items-center gap-2">
+          <input
+            type="color"
+            :value="config.notification_bg_color"
+            @input="config.notification_bg_color = ($event.target as HTMLInputElement).value"
+            class="w-8 h-7 rounded cursor-pointer border border-input p-0.5 bg-transparent"
+          />
+          <Input
+            v-model="config.notification_bg_color"
+            class="h-7 w-[90px] text-xs font-mono"
+            maxlength="7"
+            placeholder="#1a1a2e"
+          />
+        </div>
+      </div>
+
+      <!-- Text Color -->
+      <div
+        class="flex items-center justify-between bg-card border rounded-[10px] px-3.5 py-3"
+      >
+        <span class="text-sm font-medium text-foreground">{{
+          t("general.textColor")
+        }}</span>
+        <div class="flex items-center gap-2">
+          <input
+            type="color"
+            :value="config.notification_text_color"
+            @input="config.notification_text_color = ($event.target as HTMLInputElement).value"
+            class="w-8 h-7 rounded cursor-pointer border border-input p-0.5 bg-transparent"
+          />
+          <Input
+            v-model="config.notification_text_color"
+            class="h-7 w-[90px] text-xs font-mono"
+            maxlength="7"
+            placeholder="#ffffff"
+          />
+        </div>
       </div>
     </div>
 
