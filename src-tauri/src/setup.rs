@@ -57,6 +57,9 @@ pub struct HookConfig {
     /// 알림 소리 재생 여부
     #[serde(default = "default_notification_sound")]
     pub notification_sound: bool,
+    /// 알림 소리 종류 (Windows system sound alias)
+    #[serde(default = "default_notification_sound_name")]
+    pub notification_sound_name: String,
     /// 알림 표시 모니터: "primary", "0", "1", ...
     #[serde(default = "default_notification_monitor")]
     pub notification_monitor: String,
@@ -86,7 +89,7 @@ pub struct HookConfig {
     #[serde(default = "default_ssh_user")]
     pub ssh_user: String,
     /// Path to SSH private key file
-    #[serde(default)]
+    #[serde(default = "default_ssh_key_path")]
     pub ssh_key_path: String,
     /// Remote forwarding port on the SSH server
     #[serde(default = "default_ssh_remote_port")]
@@ -103,6 +106,12 @@ pub struct HookConfig {
     /// Notification window text color (HEX: #RRGGBB)
     #[serde(default = "default_notification_text_color")]
     pub notification_text_color: String,
+    /// Show notification even when the source window is focused
+    #[serde(default)]
+    pub show_when_focused: bool,
+    /// Auto-dismiss seconds when showing while focused (0 = no auto-dismiss)
+    #[serde(default = "default_focused_dismiss_seconds")]
+    pub focused_dismiss_seconds: u32,
 }
 
 fn default_remote_port() -> u16 {
@@ -117,12 +126,29 @@ fn default_ssh_user() -> String {
     "aicc".into()
 }
 
+fn default_ssh_key_path() -> String {
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        let path = std::path::Path::new(&profile)
+            .join(".ssh")
+            .join("id_rsa");
+        path.to_string_lossy().into_owned()
+    } else if let Ok(home) = std::env::var("HOME") {
+        format!("{home}/.ssh/id_rsa")
+    } else {
+        String::new()
+    }
+}
+
 fn default_ssh_remote_port() -> u16 {
     19876
 }
 
 fn default_notification_opacity() -> u32 {
     60
+}
+
+fn default_focused_dismiss_seconds() -> u32 {
+    3
 }
 
 fn default_notification_bg_color() -> String {
@@ -151,6 +177,10 @@ fn default_notification_position() -> String {
 
 fn default_notification_sound() -> bool {
     true
+}
+
+fn default_notification_sound_name() -> String {
+    "Windows Notify System Generic.wav".into()
 }
 
 fn default_notification_monitor() -> String {
@@ -207,6 +237,7 @@ impl Default for HookConfig {
             auto_dismiss_seconds: 0,
             notification_position: "bottom_right".into(),
             notification_sound: true,
+            notification_sound_name: "Windows Notify System Generic.wav".into(),
             notification_monitor: "primary".into(),
             locale: "ko".into(),
             codex_enabled: false,
@@ -217,12 +248,14 @@ impl Default for HookConfig {
             ssh_host: String::new(),
             ssh_port: 21168,
             ssh_user: "aicc".into(),
-            ssh_key_path: String::new(),
+            ssh_key_path: default_ssh_key_path(),
             ssh_remote_port: 19876,
             ssh_auto_connect: false,
             notification_opacity: 60,
             notification_bg_color: "#1a1a2e".into(),
             notification_text_color: "#ffffff".into(),
+            show_when_focused: false,
+            focused_dismiss_seconds: 3,
         }
     }
 }
@@ -305,6 +338,10 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
         notification_sound: root["agent_toast"]["notification_sound"]
             .as_bool()
             .unwrap_or(true),
+        notification_sound_name: root["agent_toast"]["notification_sound_name"]
+            .as_str()
+            .unwrap_or("Windows Notify System Generic.wav")
+            .to_string(),
         notification_monitor: root["agent_toast"]["notification_monitor"]
             .as_str()
             .unwrap_or("primary")
@@ -334,10 +371,12 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
             .as_str()
             .unwrap_or("aicc")
             .to_string(),
-        ssh_key_path: root["agent_toast"]["ssh_key_path"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        ssh_key_path: {
+            let v = root["agent_toast"]["ssh_key_path"]
+                .as_str()
+                .unwrap_or("");
+            if v.is_empty() { default_ssh_key_path() } else { v.to_string() }
+        },
         ssh_remote_port: root["agent_toast"]["ssh_remote_port"]
             .as_u64()
             .unwrap_or(19876) as u16,
@@ -362,6 +401,12 @@ fn parse_hook_config_from_json(content: &str) -> HookConfig {
             .as_str()
             .unwrap_or("#ffffff")
             .to_string(),
+        show_when_focused: root["agent_toast"]["show_when_focused"]
+            .as_bool()
+            .unwrap_or(false),
+        focused_dismiss_seconds: root["agent_toast"]["focused_dismiss_seconds"]
+            .as_u64()
+            .unwrap_or(3) as u32,
         // 나머지는 Default에서 가져오기
         ..HookConfig::default()
     };
@@ -883,6 +928,10 @@ pub fn save_hook_config(
         Value::Bool(config.notification_sound),
     );
     cn.insert(
+        "notification_sound_name".into(),
+        Value::String(config.notification_sound_name),
+    );
+    cn.insert(
         "notification_monitor".into(),
         Value::String(config.notification_monitor),
     );
@@ -918,6 +967,14 @@ pub fn save_hook_config(
     cn.insert(
         "notification_text_color".into(),
         Value::String(config.notification_text_color),
+    );
+    cn.insert(
+        "show_when_focused".into(),
+        Value::Bool(config.show_when_focused),
+    );
+    cn.insert(
+        "focused_dismiss_seconds".into(),
+        Value::Number(config.focused_dismiss_seconds.into()),
     );
     root["agent_toast"] = Value::Object(cn);
 
@@ -1004,18 +1061,37 @@ pub fn load_auto_close_on_focus() -> bool {
         .unwrap_or(true)
 }
 
-/// 설정 파일에서 notification_sound 값만 빠르게 읽기
-pub fn load_notification_sound() -> bool {
+/// 설정 파일에서 show_when_focused 값만 빠르게 읽기
+pub fn load_show_when_focused() -> bool {
     let path = settings_path();
     let Ok(content) = std::fs::read_to_string(&path) else {
-        return true;
+        return false;
     };
     let Ok(root) = serde_json::from_str::<Value>(&content) else {
-        return true;
+        return false;
     };
-    root["agent_toast"]["notification_sound"]
+    root["agent_toast"]["show_when_focused"]
         .as_bool()
-        .unwrap_or(true)
+        .unwrap_or(false)
+}
+
+/// 설정 파일에서 notification_sound 및 notification_sound_name 값만 빠르게 읽기
+pub fn load_notification_sound() -> (bool, String) {
+    let path = settings_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (true, "Windows Notify System Generic.wav".into());
+    };
+    let Ok(root) = serde_json::from_str::<Value>(&content) else {
+        return (true, "Windows Notify System Generic.wav".into());
+    };
+    let enabled = root["agent_toast"]["notification_sound"]
+        .as_bool()
+        .unwrap_or(true);
+    let name = root["agent_toast"]["notification_sound_name"]
+        .as_str()
+        .unwrap_or("Windows Notify System Generic.wav")
+        .to_string();
+    (enabled, name)
 }
 
 /// 설정 파일에서 notification_position 값만 빠르게 읽기
@@ -1835,7 +1911,7 @@ mod tests {
         assert_eq!(config.ssh_host, "");
         assert_eq!(config.ssh_port, 21168);
         assert_eq!(config.ssh_user, "aicc");
-        assert_eq!(config.ssh_key_path, "");
+        assert_eq!(config.ssh_key_path, default_ssh_key_path());
         assert_eq!(config.ssh_remote_port, 19876);
         assert!(!config.ssh_auto_connect);
         assert_eq!(config.notification_opacity, 60);

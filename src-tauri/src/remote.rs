@@ -120,6 +120,10 @@ impl SshTunnel {
     /// "connection refused" or "permission denied".  If the process exits
     /// within that window the captured stderr is written to the log file and
     /// the error message returned to the caller contains only the log path.
+    ///
+    /// Includes automatic retry: if the first attempt fails (commonly due to
+    /// a stale remote port listener), performs an additional cleanup and
+    /// retries once.
     pub fn connect(&mut self, status: Arc<Mutex<TunnelStatus>>) -> Result<(), String> {
         if self.process.is_some() {
             return Err("Tunnel already running".to_string());
@@ -127,9 +131,53 @@ impl SshTunnel {
 
         *status.lock().unwrap() = TunnelStatus::Connecting;
 
+        // Clean up stale remote port listeners from previous sessions.
+        // On Windows, child.kill() uses TerminateProcess which doesn't give SSH
+        // a chance to send SSH_MSG_DISCONNECT, leaving the remote sshd alive.
+        cleanup_remote_port(&self.config);
+
+        // First attempt
+        match self.spawn_and_wait(&status) {
+            Ok(()) => {
+                *status.lock().unwrap() = TunnelStatus::Connected;
+                log::info!("[SSH] Tunnel connected on first attempt");
+                Ok(())
+            }
+            Err(first_err) => {
+                log::warn!("[SSH] First attempt failed: {first_err}");
+                log::info!("[SSH] Retrying after additional cleanup...");
+
+                // Reset status for retry
+                *status.lock().unwrap() = TunnelStatus::Connecting;
+
+                // Aggressive second cleanup with longer wait
+                cleanup_remote_port(&self.config);
+                std::thread::sleep(Duration::from_secs(2));
+
+                // Second (final) attempt
+                match self.spawn_and_wait(&status) {
+                    Ok(()) => {
+                        *status.lock().unwrap() = TunnelStatus::Connected;
+                        log::info!("[SSH] Tunnel connected on retry");
+                        Ok(())
+                    }
+                    Err(retry_err) => {
+                        log::error!("[SSH] Retry also failed: {retry_err}");
+                        // Status already set to Error by spawn_and_wait
+                        Err(retry_err)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Internal: spawn SSH process and wait up to 3 seconds for early failure.
+    /// On success, stores the child process in `self.process`.
+    /// On failure, sets `TunnelStatus::Error` and returns the error message.
+    fn spawn_and_wait(&mut self, status: &Arc<Mutex<TunnelStatus>>) -> Result<(), String> {
         let args = self.build_ssh_args();
         log::info!(
-            "[SSH] Connecting tunnel to {}:{} (args: {:?})",
+            "[SSH] Spawning tunnel to {}:{} (args: {:?})",
             self.config.host,
             self.config.port,
             args
@@ -206,7 +254,6 @@ impl SshTunnel {
         }
 
         self.process = Some(child);
-        *status.lock().unwrap() = TunnelStatus::Connected;
         log::info!("[SSH] Tunnel process spawned and alive after {wait_ms}ms");
         Ok(())
     }
@@ -236,19 +283,103 @@ impl SshTunnel {
     }
 }
 
+// ── Remote Port Cleanup ──────────────────────────────────────────────────────
+
+/// Kill any process listening on the configured remote port via SSH.
+///
+/// On Windows, `child.kill()` calls `TerminateProcess` which is an immediate
+/// hard kill — the SSH client never sends `SSH_MSG_DISCONNECT` to the server.
+/// The remote `sshd` keeps the forwarded port open until TCP keepalive times
+/// out (minutes to hours).  This function SSHes into the remote host and runs
+/// `fuser -k PORT/tcp` to clean up those stale listeners before establishing
+/// a new tunnel.
+fn cleanup_remote_port(config: &SshConfig) {
+    log::info!(
+        "[SSH] Cleaning up stale listeners on remote port {} ({}@{}:{})",
+        config.remote_port,
+        config.user,
+        config.host,
+        config.port
+    );
+
+    let port_str = config.port.to_string();
+    // Use multiple tools for portability: fuser (procps), lsof, ss+kill
+    let port = config.remote_port;
+    let kill_cmd = format!(
+        "fuser -k {port}/tcp 2>/dev/null; \
+         kill $(lsof -t -i:{port} 2>/dev/null) 2>/dev/null; \
+         exit 0"
+    );
+
+    let mut cmd = Command::new("ssh");
+    cmd.arg(format!("{}@{}", config.user, config.host))
+        .arg("-p")
+        .arg(&port_str);
+
+    if !config.key_path.is_empty() {
+        cmd.arg("-i").arg(&config.key_path);
+    }
+
+    cmd.args(["-o", "StrictHostKeyChecking=accept-new"])
+        .args(["-o", "ConnectTimeout=5"])
+        .args(["-o", "BatchMode=yes"])
+        .arg("--")
+        .arg(&kill_cmd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match cmd.output() {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if output.status.success() {
+                log::info!("[SSH] Remote port cleanup completed");
+            } else {
+                log::warn!(
+                    "[SSH] Remote port cleanup exited with {}: {}",
+                    output.status,
+                    stderr.trim()
+                );
+            }
+        }
+        Err(e) => {
+            log::warn!("[SSH] Failed to run remote port cleanup: {e}");
+        }
+    }
+
+    // Pause to allow the OS to fully release the port.
+    // 500ms is sometimes insufficient for TCP TIME_WAIT cleanup.
+    std::thread::sleep(Duration::from_millis(1000));
+}
+
 // ── Watchdog ──────────────────────────────────────────────────────────────────
 
 /// Start a watchdog thread that monitors the SSH tunnel process.
 /// If the process dies and auto_reconnect is true, it attempts to reconnect.
+/// Respects the `user_disconnected` flag to avoid reconnecting after manual
+/// disconnect or app shutdown.
 pub fn start_watchdog(
     tunnel: Arc<Mutex<Option<SshTunnel>>>,
     status: Arc<Mutex<TunnelStatus>>,
     auto_reconnect: bool,
+    user_disconnected: Arc<Mutex<bool>>,
 ) {
     let poll_interval = Duration::from_secs(10);
 
     std::thread::spawn(move || loop {
         std::thread::sleep(poll_interval);
+
+        // Skip if user/app explicitly disconnected
+        if *user_disconnected.lock().unwrap() {
+            continue;
+        }
 
         let mut guard = tunnel.lock().unwrap();
         let Some(ref mut t) = *guard else { continue };
@@ -391,13 +522,17 @@ fn handle_http_request(
         }
     };
 
-    // Force source to "remote" regardless of what was sent
-    notify_req.source = "remote".to_string();
-    notify_req.remote_host = if ssh_host.is_empty() {
-        None
+    // Keep user-provided source as display name (e.g., "GOLD24").
+    // Default to "remote" only if the caller left it empty.
+    if notify_req.source.is_empty() {
+        notify_req.source = "remote".to_string();
+    }
+    // Always set remote_host so notification.rs knows to skip win32 lookups.
+    notify_req.remote_host = Some(if ssh_host.is_empty() {
+        "remote".to_string()
     } else {
-        Some(ssh_host.to_string())
-    };
+        ssh_host.to_string()
+    });
 
     log::info!(
         "[HTTP] 200 OK: showing notification event={}, pid={}, message={:?}",
@@ -768,29 +903,52 @@ mod tests {
     }
 
     #[test]
-    fn test_source_remote_override() {
-        // Simulate the server overriding source to "remote"
+    fn test_source_preserved_from_request() {
+        // Source field is kept as-is for display (e.g., "GOLD24")
         let mut req = NotifyRequest {
             pid: 1234,
             event: "task_complete".to_string(),
             message: Some("Done".to_string()),
             title_hint: None,
             process_tree: None,
-            source: "claude".to_string(), // This would be overridden
+            source: "GOLD24".to_string(),
             remote_host: None,
         };
-        // The server always forces source to "remote"
-        req.source = "remote".to_string();
+        // Server keeps user-provided source; only defaults empty to "remote"
+        if req.source.is_empty() {
+            req.source = "remote".to_string();
+        }
+        req.remote_host = Some("10.0.0.1".to_string());
+        assert_eq!(req.source, "GOLD24");
+        assert!(req.remote_host.is_some());
+    }
+
+    #[test]
+    fn test_source_defaults_to_remote_when_empty() {
+        let mut req = NotifyRequest {
+            pid: 0,
+            event: "task_complete".to_string(),
+            message: None,
+            title_hint: None,
+            process_tree: None,
+            source: "".to_string(),
+            remote_host: None,
+        };
+        if req.source.is_empty() {
+            req.source = "remote".to_string();
+        }
+        req.remote_host = Some("remote".to_string());
         assert_eq!(req.source, "remote");
     }
 
     #[test]
-    fn test_source_remote_is_internal() {
-        // Verify that "remote" source is treated as internal (no win32 lookup)
-        // This mirrors the logic in notification.rs
-        let source = "remote";
-        let is_internal = source == "updater" || source == "remote";
-        assert!(is_internal, "Remote source must be treated as internal");
+    fn test_remote_detected_by_remote_host() {
+        // Remote notifications are identified by remote_host being set,
+        // not by source == "remote". This mirrors notification.rs logic.
+        let remote_host: Option<String> = Some("10.0.0.1".to_string());
+        let source = "GOLD24";
+        let is_internal = source == "updater" || remote_host.is_some();
+        assert!(is_internal, "Remote notification must be treated as internal");
     }
 
     #[test]
@@ -802,7 +960,8 @@ mod tests {
         assert!(config.ssh_host.is_empty());
         assert_eq!(config.ssh_port, 21168);
         assert_eq!(config.ssh_user, "aicc");
-        assert!(config.ssh_key_path.is_empty());
+        // Default SSH key path is resolved from USERPROFILE/HOME env
+        assert!(!config.ssh_key_path.is_empty() || std::env::var("USERPROFILE").is_err() && std::env::var("HOME").is_err());
         assert_eq!(config.ssh_remote_port, 19876);
         assert!(!config.ssh_auto_connect);
     }

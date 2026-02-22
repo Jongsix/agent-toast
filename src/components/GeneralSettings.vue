@@ -25,6 +25,19 @@ const { t, locale } = useI18n();
 
 const config = defineModel<HookConfig>({ required: true });
 
+const soundOptions = [
+  { value: "Windows Notify System Generic.wav", labelKey: "general.sound_notify" },
+  { value: "Windows Notify Email.wav", labelKey: "general.sound_email" },
+  { value: "Windows Notify Messaging.wav", labelKey: "general.sound_messaging" },
+  { value: "Windows Notify Calendar.wav", labelKey: "general.sound_calendar" },
+  { value: "Windows Proximity Notification.wav", labelKey: "general.sound_proximity" },
+  { value: "chimes.wav", labelKey: "general.sound_chimes" },
+  { value: "chord.wav", labelKey: "general.sound_chord" },
+  { value: "ding.wav", labelKey: "general.sound_ding" },
+  { value: "notify.wav", labelKey: "general.sound_classic" },
+  { value: "tada.wav", labelKey: "general.sound_tada" },
+] as const;
+
 const titleOptions = [
   { value: "project", labelKey: "general.title_project" },
   { value: "window", labelKey: "general.title_window" },
@@ -180,6 +193,44 @@ onMounted(async () => {
         </Select>
       </div>
 
+      <!-- Show when focused -->
+      <div
+        class="flex items-center justify-between bg-card border rounded-lg px-3.5 py-3"
+      >
+        <span class="text-sm font-medium text-foreground">{{
+          t("general.show_when_focused")
+        }}</span>
+        <Switch v-model="config.show_when_focused" />
+      </div>
+
+      <!-- Focused dismiss seconds (visible only when show_when_focused is on) -->
+      <div
+        v-if="config.show_when_focused"
+        class="flex items-center justify-between bg-card border rounded-[10px] px-3.5 py-3"
+      >
+        <div class="flex flex-col gap-0.5">
+          <span class="text-sm font-medium text-foreground">{{
+            t("general.focused_dismiss")
+          }}</span>
+          <span class="text-[11px] text-muted-foreground">{{
+            t("general.focused_dismiss_hint")
+          }}</span>
+        </div>
+        <NumberField
+          v-model="config.focused_dismiss_seconds"
+          :min="0"
+          :max="60"
+          :step="1"
+          class="w-[100px]"
+        >
+          <NumberFieldContent>
+            <NumberFieldDecrement class="p-2" />
+            <NumberFieldInput class="h-7 text-xs" />
+            <NumberFieldIncrement class="p-2" />
+          </NumberFieldContent>
+        </NumberField>
+      </div>
+
       <!-- Auto close on focus -->
       <div
         class="flex items-center justify-between bg-card border rounded-lg px-3.5 py-3"
@@ -198,6 +249,34 @@ onMounted(async () => {
           t("general.sound")
         }}</span>
         <Switch v-model="config.notification_sound" />
+      </div>
+
+      <!-- Sound Name -->
+      <div
+        v-if="config.notification_sound"
+        class="flex items-center justify-between bg-card border rounded-[10px] px-3.5 py-3"
+      >
+        <span class="text-sm font-medium text-foreground">{{
+          t("general.sound_type")
+        }}</span>
+        <Select
+          :key="`sound-${locale}`"
+          v-model="config.notification_sound_name"
+          @update:model-value="(v: unknown) => invoke('play_sound', { sound_name: v as string })"
+        >
+          <SelectTrigger size="sm" class="w-[150px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem
+              v-for="o in soundOptions"
+              :key="o.value"
+              :value="o.value"
+            >
+              {{ t(o.labelKey) }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <!-- Notification Style section header -->

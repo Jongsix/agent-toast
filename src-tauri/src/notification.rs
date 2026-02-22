@@ -77,10 +77,12 @@ pub fn show_notification(
         request.source
     );
 
-    // For internal notifications (updater, remote), skip win32 lookups
-    let is_internal = request.source == "updater" || request.source == "remote";
+    // For internal notifications (updater, remote), skip win32 lookups.
+    // Remote notifications are identified by remote_host being set (not by source value),
+    // so the source field can carry a custom display name (e.g., "GOLD24").
+    let is_internal = request.source == "updater" || request.remote_host.is_some();
 
-    let (source_hwnd, process_tree, window_title) = if is_internal {
+    let (source_hwnd, process_tree, window_title, is_source_focused) = if is_internal {
         (
             0isize,
             vec![],
@@ -88,6 +90,7 @@ pub fn show_notification(
                 .title_hint
                 .clone()
                 .unwrap_or_else(|| "Agent Toast".to_string()),
+            false,
         )
     } else {
         let tree = request
@@ -111,10 +114,10 @@ pub fn show_notification(
         }
         let (hwnd, _) = found.unwrap_or((0, 0));
 
-        // FR-2: Skip if source window is already focused (compare by HWND, not PID)
+        // FR-2: Skip if source window is already focused, unless show_when_focused is enabled
         let focused = win32::is_hwnd_focused(hwnd);
         log::debug!("[DEBUG] is_hwnd_focused({hwnd})={focused}");
-        if focused {
+        if focused && !crate::setup::load_show_when_focused() {
             return;
         }
 
@@ -135,14 +138,19 @@ pub fn show_notification(
             }
         };
 
-        (hwnd, tree, title)
+        (hwnd, tree, title, focused)
     };
 
     let mut mgr = state.lock().unwrap();
     mgr.counter += 1;
     let id = format!("notify-{}", mgr.counter);
 
-    let auto_dismiss_seconds = crate::setup::get_hook_config().auto_dismiss_seconds;
+    let hook_config = crate::setup::get_hook_config();
+    let auto_dismiss_seconds = if is_source_focused && hook_config.focused_dismiss_seconds > 0 {
+        hook_config.focused_dismiss_seconds
+    } else {
+        hook_config.auto_dismiss_seconds
+    };
 
     let data = NotificationData {
         id: id.clone(),
@@ -191,8 +199,9 @@ pub fn show_notification(
                     win.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
 
                 // 알림 소리 재생
-                if crate::setup::load_notification_sound() {
-                    crate::sound::play_notification_sound();
+                let (sound_enabled, sound_name) = crate::setup::load_notification_sound();
+                if sound_enabled {
+                    crate::sound::play_notification_sound(&sound_name);
                 }
                 // Also emit event as backup (frontend primarily uses invoke)
                 let data_clone = data.clone();

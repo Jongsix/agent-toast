@@ -73,6 +73,7 @@ const config = ref<HookConfig>({
   auto_dismiss_seconds: 0,
   notification_position: "bottom_right",
   notification_sound: true,
+  notification_sound_name: "Windows Notify System Generic.wav",
   notification_monitor: "primary",
   locale: "ko",
   codex_enabled: false,
@@ -88,6 +89,8 @@ const config = ref<HookConfig>({
   notification_opacity: 60,
   notification_bg_color: '#1a1a2e',
   notification_text_color: '#ffffff',
+  show_when_focused: false,
+  focused_dismiss_seconds: 3,
 });
 
 watch(
@@ -259,6 +262,7 @@ async function onOpenSettings() {
 
 function onReset() {
   const currentLocale = config.value.locale;
+  const currentSshKeyPath = config.value.ssh_key_path;
   config.value = {
     stop_enabled: true,
     stop_message: t("defaults.stop_message"),
@@ -299,6 +303,7 @@ function onReset() {
     auto_dismiss_seconds: 0,
     notification_position: "bottom_right",
     notification_sound: true,
+    notification_sound_name: "Windows Notify System Generic.wav",
     notification_monitor: "primary",
     locale: currentLocale,
     codex_enabled: false,
@@ -308,12 +313,14 @@ function onReset() {
     ssh_host: "",
     ssh_port: 21168,
     ssh_user: "aicc",
-    ssh_key_path: "",
+    ssh_key_path: currentSshKeyPath,
     ssh_remote_port: 19876,
     ssh_auto_connect: false,
     notification_opacity: 60,
     notification_bg_color: '#1a1a2e',
     notification_text_color: '#ffffff',
+    show_when_focused: false,
+    focused_dismiss_seconds: 3,
   };
 }
 

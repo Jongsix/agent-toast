@@ -330,13 +330,13 @@ async function onClose() {
         >
           {{ notification.window_title }}
         </div>
-        <!-- Remote server host -->
+        <!-- Remote server source name (e.g., "GOLD24") -->
         <div
-          v-if="notification.source === 'remote' && notification.remote_host"
+          v-if="notification.remote_host"
           class="text-[11px] truncate leading-snug"
           :style="{ color: styleSettings.textColor, opacity: 0.5 }"
         >
-          {{ notification.remote_host }}
+          {{ notification.source }}
         </div>
         <div
           v-if="notification.message"

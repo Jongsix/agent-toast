@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/number-field";
 import { Switch } from "@/components/ui/switch";
 import { invoke } from "@tauri-apps/api/core";
+import { Copy } from "lucide-vue-next";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { toast } from "vue-sonner";
@@ -147,20 +148,23 @@ const curlCommand = computed(() => {
 const hookConfigExample = computed(() => {
   const port = config.value.ssh_remote_port || 19876;
   const token = config.value.remote_token || "YOUR_TOKEN";
+  const curlCmd = `curl -s -X POST -H 'X-Agent-Toast-Token: ${token}' -H 'Content-Type: application/json' -d '{"pid":0,"event":"task_complete","message":"Task done","source":"remote"}' http://localhost:${port}/notify`;
+  // JSON.stringify() automatically escapes " to \" for valid JSON
+  const jsonCmd = JSON.stringify(curlCmd);
   return `{
   "hooks": {
     "Stop": [{
       "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "curl -s -X POST -H 'X-Agent-Toast-Token: ${token}' -H 'Content-Type: application/json' -d '{\\"pid\\":0,\\"event\\":\\"task_complete\\",\\"message\\":\\"Task done\\",\\"source\\":\\"remote\\"}' http://localhost:${port}/notify"
+        "command": ${jsonCmd}
       }]
     }]
   }
 }
 
 Linux/macOS:
-curl -s -X POST -H 'X-Agent-Toast-Token: ${token}' -H 'Content-Type: application/json' -d '{"pid":0,"event":"task_complete","message":"Task done","source":"remote"}' http://localhost:${port}/notify`;
+${curlCmd}`;
 });
 
 const isConnected = computed(() => tunnelStatus.value === "Connected");
@@ -185,6 +189,36 @@ const isError = computed(
     tunnelStatus.value !== "Connecting" &&
     tunnelStatus.value !== "Disconnected",
 );
+
+const sshCommand = computed(() => {
+  const parts = ["ssh"];
+  const port = config.value.ssh_port;
+  if (port && port !== 22) parts.push(`-p ${port}`);
+  const remotePort = config.value.ssh_remote_port || 19876;
+  const localPort = config.value.remote_port || 19876;
+  parts.push(`-R ${remotePort}:localhost:${localPort}`);
+  const key = config.value.ssh_key_path;
+  if (key) parts.push(`-i ${key}`);
+  parts.push("-N");
+  const user = config.value.ssh_user;
+  const host = config.value.ssh_host;
+  if (user && host) parts.push(`${user}@${host}`);
+  else if (host) parts.push(host);
+  return parts.join(" ");
+});
+
+const sshLoginCommand = computed(() => {
+  const parts = ["ssh"];
+  const port = config.value.ssh_port;
+  if (port && port !== 22) parts.push(`-p ${port}`);
+  const user = config.value.ssh_user;
+  const host = config.value.ssh_host;
+  if (user && host) parts.push(`${user}@${host}`);
+  else if (host) parts.push(host);
+  const key = config.value.ssh_key_path;
+  if (key) parts.push(`-i ${key}`);
+  return parts.join(" ");
+});
 
 const statusLabel = computed(() => {
   switch (tunnelStatus.value) {
@@ -346,7 +380,7 @@ const statusLabel = computed(() => {
             <Input
               v-model="config.ssh_key_path"
               class="w-[180px] h-7 text-xs"
-              placeholder="~/.ssh/id_rsa"
+              placeholder="C:\Users\...\.ssh\id_rsa"
             />
           </div>
 
@@ -381,6 +415,24 @@ const statusLabel = computed(() => {
             }}</span>
             <Switch v-model="config.ssh_auto_connect" />
           </div>
+
+          <!-- SSH Login Command -->
+          <div
+            class="flex items-center gap-2 bg-muted/50 border border-dashed rounded-[10px] px-3.5 py-2"
+          >
+            <code
+              class="flex-1 text-[11px] font-mono text-muted-foreground truncate"
+              :title="sshLoginCommand"
+              >{{ sshLoginCommand }}</code
+            >
+            <button
+              :title="t('remote.copy')"
+              class="flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+              @click="copyToClipboard(sshLoginCommand)"
+            >
+              <Copy :size="13" />
+            </button>
+          </div>
         </div>
 
         <!-- Connection Control Section -->
@@ -398,6 +450,13 @@ const statusLabel = computed(() => {
                 <Badge :variant="statusBadgeVariant" class="text-xs">{{
                   statusLabel
                 }}</Badge>
+                <button
+                  :title="sshCommand"
+                  class="flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  @click="copyToClipboard(sshCommand)"
+                >
+                  <Copy :size="13" />
+                </button>
               </div>
               <div class="flex items-center gap-2">
                 <Button

@@ -46,6 +46,7 @@ export interface HookConfig {
   auto_dismiss_seconds: number;
   notification_position: string;
   notification_sound: boolean;
+  notification_sound_name: string;
   notification_monitor: string;
   locale: string;
   codex_enabled: boolean;
@@ -61,6 +62,8 @@ export interface HookConfig {
   notification_opacity: number;
   notification_bg_color: string;
   notification_text_color: string;
+  show_when_focused: boolean;
+  focused_dismiss_seconds: number;
 }
 
 export interface MonitorInfo {

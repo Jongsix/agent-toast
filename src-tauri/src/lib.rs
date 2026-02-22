@@ -134,6 +134,11 @@ fn is_dev_mode() -> bool {
     cfg!(debug_assertions)
 }
 
+#[tauri::command(rename_all = "snake_case")]
+fn play_sound(sound_name: String) {
+    crate::sound::play_notification_sound(&sound_name);
+}
+
 #[tauri::command]
 fn is_portable() -> bool {
     let Ok(exe) = std::env::current_exe() else {
@@ -339,6 +344,7 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
             get_locale,
             is_dev_mode,
             is_portable,
+            play_sound,
             open_settings,
             setup::get_hook_config,
             setup::save_hook_config,
@@ -450,8 +456,8 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                     );
                     *remote_st.http_server_port.lock().unwrap() = port;
 
-                    // Auto-connect SSH tunnel if host is configured
-                    if !hook_config.ssh_host.is_empty() {
+                    // Auto-connect SSH tunnel if enabled and host is configured
+                    if hook_config.ssh_auto_connect && !hook_config.ssh_host.is_empty() {
                         let ssh_config = remote::SshConfig {
                             host: hook_config.ssh_host.clone(),
                             port: hook_config.ssh_port,
@@ -472,11 +478,11 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                         }
 
                         // Start watchdog for auto-reconnect
-                        let auto_reconnect = hook_config.ssh_auto_connect;
-                        remote::start_watchdog(tunnel_arc, status_arc, auto_reconnect);
+                        let user_disc = remote_st.user_disconnected.clone();
+                        remote::start_watchdog(tunnel_arc, status_arc, true, user_disc);
                     }
 
-                    // Start tray status polling thread
+                    // Always start tray status polling (user might connect manually later)
                     let poll_status = remote_st.tunnel_status.clone();
                     let poll_app = handle.clone();
                     std::thread::spawn(move || {
@@ -532,12 +538,17 @@ pub fn run_app(initial_request: Option<NotifyRequest>, open_setup: bool) {
                 log::warn!("[EXIT] App is shutting down (RunEvent::Exit)");
                 // Kill SSH tunnel process on exit
                 if let Some(remote_st) = app.try_state::<RemoteState>() {
+                    // Prevent watchdog from auto-reconnecting
+                    *remote_st.user_disconnected.lock().unwrap() = true;
+
                     let status = remote_st.tunnel_status.clone();
                     let mut guard = remote_st.ssh_tunnel.lock().unwrap();
                     if let Some(ref mut tunnel) = *guard {
                         log::info!("[EXIT] Disconnecting SSH tunnel before shutdown");
                         tunnel.disconnect(status);
                     }
+                    // Remove tunnel entirely so watchdog cannot reconnect
+                    *guard = None;
                 }
             }
             _ => {}
